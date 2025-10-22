@@ -1,0 +1,50 @@
+// BEM-style custom tweaks
+.vehicle-form {
+  & .form-label {
+    font-weight: 600;
+  }
+}
+
+.vehicle-card {
+  &__title {
+    font-size: 1rem;
+  }
+  &--alert {
+    border-left: 4px solid #dc3545;
+  }
+}
+
+// Background and theme tweaks
+body {
+  background: linear-gradient(180deg, rgba(13,110,253,0.05), rgba(25,135,84,0.05));
+}
+
+.app-bg--dark {
+  background: radial-gradient(1200px 600px at 50% -10%, rgba(255,255,255,0.05), rgba(0,0,0,0.9));
+}
+
+// Per-page backgrounds
+.page-bg--vehicles {
+  background-image: linear-gradient(120deg, rgba(13,110,253,0.10), rgba(25,135,84,0.10));
+}
+.page-bg--drivers {
+  background-image: linear-gradient(120deg, rgba(255,193,7,0.10), rgba(13,110,253,0.10));
+}
+.page-bg--cabinet {
+  background-image: linear-gradient(120deg, rgba(111,66,193,0.10), rgba(13,202,240,0.10));
+}
+.page-bg--login {
+  background-image: linear-gradient(120deg, rgba(220,53,69,0.10), rgba(13,110,253,0.10));
+}
+
+// Drivers BEM
+.driver-form {
+  & .form-label {
+    font-weight: 600;
+  }
+}
+.driver-card {
+  & img {
+    object-fit: cover;
+  }
+}

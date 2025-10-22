@@ -1,0 +1,163 @@
+{
+  "vehicles": [
+    {
+      "id": "V-001",
+      "make": "КрАЗ",
+      "model": "6322",
+      "type": "вантажівка",
+      "status": "base",
+      "assignedUnit": "Рота забезпечення",
+      "vin": "KRAZ-6322-0001",
+      "registrationNumber": "ВЧ-1234",
+      "year": 2018,
+      "mileage": 32500,
+      "notes": "Планове ТО кожні 10 тис. км"
+    }
+  ],
+  "drivers": [
+    {
+      "id": "D-001",
+      "firstName": "Іван",
+      "lastName": "Коваль",
+      "fullName": "Іван Коваль",
+      "licenseNumber": "AB123456",
+      "rank": "с-т",
+      "phone": "+380501112233",
+      "notes": "Водій КрАЗ-6322",
+      "fixedSpeed": 60,
+      "distance": 150
+    }
+  ],
+  "users": [
+    {
+      "id": "1760896266258",
+      "email": "admin@local",
+      "role": "admin",
+      "position": "Начальник автослужби",
+      "passwordHash": "$2a$10$SdqoZrHfSKt0Oi.GStbQy.oFPyjsGV.6hV0FQa0JBtXZqEB.zKKne",
+      "name": "Адміністратор",
+      "status": "active"
+    },
+    {
+      "id": "1760900403300",
+      "email": "aadmin@local",
+      "role": "superadmin",
+      "position": "Начальник автослужби",
+      "passwordHash": "$2a$10$tOiFDLqd8oNg1w/uusdnM.EupjOtvpVbCX47GWh4BPI/154G/82De",
+      "name": "Адміністратор",
+      "status": "active"
+    },
+    {
+      "id": "1760902232852",
+      "email": "vasya",
+      "name": "123123",
+      "role": "user",
+      "position": "Водій",
+      "status": "active",
+      "passwordHash": "$2a$10$1NuDb.lHi2VnBIbM9KDJbel3x5IrbJ2m095EzmAnljLYCSfaxf1AS"
+    },
+    {
+      "id": "1761111884039",
+      "email": "sasha",
+      "name": "Саша Іванов",
+      "role": "user",
+      "status": "active",
+      "passwordHash": "$2a$10$vhKBu4BFAR5V6scTFvZBL.Em/s/jgu6SiKozVPlYPVOO9k1oSxFBy"
+    },
+    {
+      "id": "1761112047894",
+      "email": "dwsq@gmail.com",
+      "name": "Дмитро Сидоров",
+      "role": "user",
+      "status": "active",
+      "passwordHash": "$2a$10$JK1gyDTUVQVwWzVVHNrUFeSVPCbrdXEGBiafbktUB/aT/AIM0b3TO"
+    },
+    {
+      "id": "1761112848740",
+      "email": "qwe@gmail.com",
+      "name": "Олексій Петров",
+      "role": "user",
+      "status": "active",
+      "passwordHash": "$2a$10$q1zfMQgATxGWWXiHsFyHh.vwpL0vVqRfxDynyE0kuyXgvUXnNnt86"
+    },
+    {
+      "id": "1761113168489",
+      "email": "1231@gmail.com",
+      "name": "Войтенко Андрій Романович",
+      "role": "user",
+      "position": "Старший Водій",
+      "status": "active",
+      "passwordHash": "$2a$10$DeKhoWe/ON4nzetuVibYsOjv1Ihs38dCnVi.hqKAwGSY5djEZcHiG"
+    },
+    {
+      "id": "1761122974853",
+      "email": "vashil047@gmail.com",
+      "name": "Саша Саша Саша",
+      "role": "user",
+      "position": "Механік водій",
+      "status": "pending",
+      "passwordHash": "$2a$10$6SyYFuywWsX5RG6mu5lmkePWZ00qGbvzSS9C9RmGVmaNkjc7C8wi6"
+    }
+  ],
+  "trips": [
+    {
+      "id": "1760903926729",
+      "driverId": "D-001",
+      "vehicleId": "V-001",
+      "date": "2025-10-20T19:58:00.000Z",
+      "distanceKm": 0,
+      "notes": "[dispatch] старт: 1  →  2 (request #1760903924186)"
+    },
+    {
+      "id": "1760903938638",
+      "driverId": "D-001",
+      "vehicleId": "V-001",
+      "date": "2025-10-19T19:58:58.637Z",
+      "distanceKm": 0,
+      "notes": "[dispatch] завершено: 1  →  2 (done) (request #1760903924186)"
+    },
+    {
+      "id": "1760904104285",
+      "driverId": "D-001",
+      "vehicleId": "V-001",
+      "date": "2025-10-19T20:01:44.285Z",
+      "distanceKm": 150,
+      "notes": ""
+    }
+  ],
+  "requests": [
+    {
+      "id": "1760903656265",
+      "vehicleId": "V-001",
+      "driverId": "D-001",
+      "from": "Київ",
+      "to": "Рівне",
+      "departAt": "2025-10-20T19:54:00.000Z",
+      "status": "done",
+      "notes": "",
+      "createdAt": "2025-10-19T19:54:16.265Z"
+    },
+    {
+      "id": "1760903695740",
+      "vehicleId": "V-001",
+      "driverId": "D-001",
+      "from": "київ",
+      "to": "київ",
+      "departAt": "2025-10-20T19:54:00.000Z",
+      "status": "done",
+      "notes": "",
+      "createdAt": "2025-10-19T19:54:55.740Z"
+    },
+    {
+      "id": "1760903924186",
+      "vehicleId": "V-001",
+      "driverId": "D-001",
+      "from": "1",
+      "to": "2",
+      "departAt": "2025-10-20T19:58:00.000Z",
+      "status": "done",
+      "notes": "",
+      "createdAt": "2025-10-19T19:58:44.186Z"
+    }
+  ]
+}
