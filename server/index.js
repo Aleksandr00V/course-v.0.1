@@ -79,12 +79,13 @@ try {
   defaultDb = migrateToVehicles(defaultDb);
   console.log('Loaded default DB from disk, keys:', Object.keys(defaultDb));
 } catch (e) {
-  // Try to load packaged JSON via require() which is more robust on some serverless bundles
+  // Try to load packaged JSON via static require which ensures bundlers include the file
   try {
-    // eslint-disable-next-line global-require, import/no-dynamic-require
-    const pkg = require(path.join(__dirname, 'db.json'));
+    // Static require so tools like vercel/node include the JSON in the function bundle
+    // eslint-disable-next-line global-require
+    const pkg = require('./db.json');
     defaultDb = migrateToVehicles(pkg || { vehicles: [], drivers: [], users: [] });
-    console.log('Loaded default DB via require(), keys:', Object.keys(defaultDb));
+    console.log('Loaded default DB via static require, keys:', Object.keys(defaultDb));
   } catch (e2) {
     console.warn('No default DB loaded at startup (maybe serverless):', e && e.message, e2 && e2.message);
   }
