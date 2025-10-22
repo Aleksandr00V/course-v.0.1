@@ -99,7 +99,9 @@ function readDb() {
     console.warn('Failed to read DB from disk, using in-memory DB:', e && e.message);
     readOnlyFs = true;
     inMemoryDb = inMemoryDb || { vehicles: [], drivers: [], users: [] };
-    return migrateToVehicles(inMemoryDb);
+    const migrated = migrateToVehicles(inMemoryDb);
+    console.log('readDb -> inMemory fallback, keys:', Object.keys(migrated));
+    return migrated;
   }
 }
 
@@ -481,7 +483,9 @@ app.put('/api/users/:id/role', requireAuth(['superadmin']), updateUserRole);
 app.get('/api/vehicles', (req, res) => {
   try {
     const db = readDb();
-    res.json(db.vehicles || []);
+    console.log('/api/vehicles db keys:', Object.keys(db));
+    const vehicles = Array.isArray(db.vehicles) ? db.vehicles : [];
+    res.json(vehicles);
   } catch (err) {
     console.error('/api/vehicles error:', err && err.stack ? err.stack : err);
     res.status(500).json({ message: 'Internal server error' });
@@ -547,7 +551,9 @@ app.delete('/api/vehicles/:id', requireAuth(['admin', 'superadmin']), (req, res)
 app.get('/api/drivers', (req, res) => {
   try {
     const db = readDb();
-    const drivers = db.users
+    console.log('/api/drivers db keys:', Object.keys(db));
+    const users = Array.isArray(db.users) ? db.users : [];
+    const drivers = users
       .filter(user => user.position === 'Водій')
       .map(user => ({
         id: user.id,
