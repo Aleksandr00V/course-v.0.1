@@ -724,6 +724,11 @@ app.delete('/api/requests/:id', requireAuth(['admin', 'superadmin']), (req, res)
   res.status(204).send();
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+// If this file is run directly, start the HTTP server. Otherwise export the app
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+} else {
+  module.exports = app;
+}
