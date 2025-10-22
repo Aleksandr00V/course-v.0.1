@@ -14,6 +14,13 @@
     "concurrently": "^9.0.1"
   }
   ,"dependencies": {
-    "serverless-http": "^3.0.0"
+    "serverless-http": "^3.0.0",
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "express-session": "^1.18.2",
+    "memorystore": "^1.6.7"
   }
 }
