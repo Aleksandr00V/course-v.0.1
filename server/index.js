@@ -79,7 +79,15 @@ try {
   defaultDb = migrateToVehicles(defaultDb);
   console.log('Loaded default DB from disk, keys:', Object.keys(defaultDb));
 } catch (e) {
-  console.warn('No default DB loaded at startup (maybe serverless):', e && e.message);
+  // Try to load packaged JSON via require() which is more robust on some serverless bundles
+  try {
+    // eslint-disable-next-line global-require, import/no-dynamic-require
+    const pkg = require(path.join(__dirname, 'db.json'));
+    defaultDb = migrateToVehicles(pkg || { vehicles: [], drivers: [], users: [] });
+    console.log('Loaded default DB via require(), keys:', Object.keys(defaultDb));
+  } catch (e2) {
+    console.warn('No default DB loaded at startup (maybe serverless):', e && e.message, e2 && e2.message);
+  }
 }
 
 // Startup trace to help debugging on serverless platforms
@@ -109,7 +117,19 @@ function readDb() {
     const raw = fs.readFileSync(DB_PATH, 'utf-8');
     try {
       const parsed = JSON.parse(raw || '{"vehicles": [], "drivers": [], "users": []}');
-      return migrateToVehicles(parsed);
+      const migrated = migrateToVehicles(parsed);
+      // If parsed DB exists but is empty, and we have a packaged defaultDb with data, prefer that
+      if (
+        defaultDb &&
+        Array.isArray(defaultDb.vehicles) &&
+        defaultDb.vehicles.length > 0 &&
+        Array.isArray(migrated.vehicles) &&
+        migrated.vehicles.length === 0
+      ) {
+        console.log('Parsed DB empty — returning packaged defaultDb instead');
+        return defaultDb;
+      }
+      return migrated;
     } catch (parseErr) {
       console.warn('DB parse failed, attempting sanitization:', parseErr && parseErr.message);
       // Try to sanitize common JSON problems: strip control chars, remove /* */ and // comments, remove trailing commas
