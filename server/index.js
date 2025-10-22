@@ -71,6 +71,20 @@ function migrateToVehicles(db) {
   return { vehicles: [], drivers: db.drivers || [], users: db.users || [] };
 }
 
+// Try to load a packaged default DB at startup as a fallback (helps serverless deployments)
+let defaultDb = null;
+try {
+  const rawDefault = fs.readFileSync(DB_PATH, 'utf-8');
+  defaultDb = JSON.parse(rawDefault || '{"vehicles": [], "drivers": [], "users": []}');
+  defaultDb = migrateToVehicles(defaultDb);
+  console.log('Loaded default DB from disk, keys:', Object.keys(defaultDb));
+} catch (e) {
+  console.warn('No default DB loaded at startup (maybe serverless):', e && e.message);
+}
+
+// Startup trace to help debugging on serverless platforms
+console.log('Server startup:', { NODE_ENV: process.env.NODE_ENV || 'undefined', JWT_SECRET_set: !!process.env.JWT_SECRET });
+
 // If running in a serverless environment the FS can be read-only. Use an in-memory
 // fallback DB when writes fail.
 let inMemoryDb = null;
@@ -130,6 +144,11 @@ function readDb() {
     inMemoryDb = inMemoryDb || { vehicles: [], drivers: [], users: [] };
     const migrated = migrateToVehicles(inMemoryDb);
     console.log('readDb -> inMemory fallback, keys:', Object.keys(migrated));
+    // If migrated is empty but we loaded a packaged defaultDb, use that as fallback
+    if (defaultDb && Array.isArray(defaultDb.vehicles) && defaultDb.vehicles.length > 0 && (!migrated.vehicles || migrated.vehicles.length === 0)) {
+      console.log('Using packaged defaultDb because in-memory DB is empty');
+      return defaultDb;
+    }
     return migrated;
   }
 }
@@ -247,6 +266,42 @@ function requireAuth(allowedRoles = []) {
 // Health
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
+});
+
+// Debug endpoint to inspect DB loading behavior in serverless/runtime
+app.get('/api/debug-db', (req, res) => {
+  try {
+    const fileExists = fs.existsSync(DB_PATH);
+    let fileSize = null;
+    if (fileExists) {
+      try {
+        const st = fs.statSync(DB_PATH);
+        fileSize = st.size;
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    const db = readDb();
+    res.json({
+      ok: true,
+      nodeEnv: process.env.NODE_ENV || null,
+      readOnlyFs: !!readOnlyFs,
+      dbPath: DB_PATH,
+      fileExists,
+      fileSize,
+      defaultDbLoaded: !!defaultDb,
+      defaultDbKeys: defaultDb ? Object.keys(defaultDb) : [],
+      inMemoryDbKeys: inMemoryDb ? Object.keys(inMemoryDb) : [],
+      returnedDbKeys: db ? Object.keys(db) : [],
+      vehiclesCount: Array.isArray(db.vehicles) ? db.vehicles.length : 0,
+      driversCount: Array.isArray(db.drivers) ? db.drivers.length : 0,
+      usersCount: Array.isArray(db.users) ? db.users.length : 0,
+    });
+  } catch (err) {
+    console.error('/api/debug-db error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ message: 'Failed to inspect DB', error: String(err) });
+  }
 });
 
 // Ensure trips array exists
