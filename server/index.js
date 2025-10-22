@@ -276,36 +276,46 @@ ensureSeedVehicles();
 
 // Auth
 app.post('/api/auth/register', (req, res) => {
-  let { email, password, lastName, firstName, middleName, position } = req.body || {};
-  if (!email || !password || !lastName || !firstName || !middleName || !position) {
-    return res.status(400).json({ message: 'All fields are required: email, password, lastName, firstName, middleName, position' });
+  try {
+    let { email, password, lastName, firstName, middleName, position } = req.body || {};
+    if (!email || !password || !lastName || !firstName || !middleName || !position) {
+      return res.status(400).json({ message: 'All fields are required: email, password, lastName, firstName, middleName, position' });
+    }
+    email = String(email).trim().toLowerCase();
+    const db = readDb();
+    const exists = (db.users || []).some((u) => (u.email || '').toLowerCase() === email);
+    if (exists) return res.status(409).json({ message: 'User already exists' });
+    const passwordHash = bcrypt.hashSync(password, 10);
+    const name = `${lastName} ${firstName} ${middleName}`.trim();
+    const user = { id: Date.now().toString(), email, name, role: 'user', position, status: 'pending', passwordHash };
+    db.users.push(user);
+    writeDb(db);
+    res.status(201).json({ ok: true, status: 'pending', user: { id: user.id, email: user.email, role: user.role, name: user.name, position: user.position } });
+  } catch (err) {
+    console.error('/api/auth/register error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ message: 'Internal server error' });
   }
-  email = String(email).trim().toLowerCase();
-  const db = readDb();
-  const exists = (db.users || []).some((u) => (u.email || '').toLowerCase() === email);
-  if (exists) return res.status(409).json({ message: 'User already exists' });
-  const passwordHash = bcrypt.hashSync(password, 10);
-  const name = `${lastName} ${firstName} ${middleName}`.trim();
-  const user = { id: Date.now().toString(), email, name, role: 'user', position, status: 'pending', passwordHash };
-  db.users.push(user);
-  writeDb(db);
-  res.status(201).json({ ok: true, status: 'pending', user: { id: user.id, email: user.email, role: user.role, name: user.name, position: user.position } });
 });
 
 app.post('/api/auth/login', (req, res) => {
-  let { email, password } = req.body || {};
-  const db = readDb();
-  email = String(email || '').toLowerCase();
-  const user = (db.users || []).find((u) => (u.email || '').toLowerCase() === email);
-  if (!user) return res.status(401).json({ message: 'Invalid credentials' });
-  const ok = bcrypt.compareSync(password || '', user.passwordHash);
-  if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
-  if (user.status && user.status !== 'active') {
-    if (user.status === 'pending') return res.status(403).json({ message: 'Account pending approval' });
-    if (user.status === 'rejected') return res.status(403).json({ message: 'Account rejected' });
+  try {
+    let { email, password } = req.body || {};
+    const db = readDb();
+    email = String(email || '').toLowerCase();
+    const user = (db.users || []).find((u) => (u.email || '').toLowerCase() === email);
+    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+    const ok = bcrypt.compareSync(password || '', user.passwordHash);
+    if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
+    if (user.status && user.status !== 'active') {
+      if (user.status === 'pending') return res.status(403).json({ message: 'Account pending approval' });
+      if (user.status === 'rejected') return res.status(403).json({ message: 'Account rejected' });
+    }
+    const token = signToken({ id: user.id, email: user.email, role: user.role, name: user.name });
+    res.json({ token, user: { id: user.id, email: user.email, role: user.role, name: user.name } });
+  } catch (err) {
+    console.error('/api/auth/login error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ message: 'Internal server error' });
   }
-  const token = signToken({ id: user.id, email: user.email, role: user.role, name: user.name });
-  res.json({ token, user: { id: user.id, email: user.email, role: user.role, name: user.name } });
 });
 
 // Self profile
@@ -469,8 +479,13 @@ app.put('/api/users/:id/role', requireAuth(['superadmin']), updateUserRole);
 
 // List vehicles
 app.get('/api/vehicles', (req, res) => {
-  const db = readDb();
-  res.json(db.vehicles || []);
+  try {
+    const db = readDb();
+    res.json(db.vehicles || []);
+  } catch (err) {
+    console.error('/api/vehicles error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 });
 
 app.get('/api/vehicles/:id', (req, res) => {
@@ -530,18 +545,23 @@ app.delete('/api/vehicles/:id', requireAuth(['admin', 'superadmin']), (req, res)
 
 // Drivers CRUD
 app.get('/api/drivers', (req, res) => {
-  const db = readDb();
-  const drivers = db.users
-    .filter(user => user.position === 'Водій')
-    .map(user => ({
-      id: user.id,
-      firstName: user.name.split(' ')[1] || '',
-      lastName: user.name.split(' ')[0] || '',
-      position: user.position,
-      phone: user.phone || '',
-      email: user.email
-    }));
-  res.json(drivers);
+  try {
+    const db = readDb();
+    const drivers = db.users
+      .filter(user => user.position === 'Водій')
+      .map(user => ({
+        id: user.id,
+        firstName: user.name.split(' ')[1] || '',
+        lastName: user.name.split(' ')[0] || '',
+        position: user.position,
+        phone: user.phone || '',
+        email: user.email
+      }));
+    res.json(drivers);
+  } catch (err) {
+    console.error('/api/drivers error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 });
 
 app.get('/api/drivers/:id', (req, res) => {
@@ -764,6 +784,13 @@ app.delete('/api/requests/:id', requireAuth(['admin', 'superadmin']), (req, res)
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+
+  // Global error handler (shouldn't replace route-level handlers, but protects against crashes)
+  app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err && err.stack ? err.stack : err);
+    if (res.headersSent) return next(err);
+    res.status(500).json({ message: 'Internal server error' });
   });
 } else {
   module.exports = app;
