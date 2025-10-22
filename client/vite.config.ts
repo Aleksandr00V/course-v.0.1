@@ -7,8 +7,8 @@ export default defineConfig({
     host: true, // expose to LAN
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:5001', // Updated to match backend port
-      '/uploads': 'http://localhost:5001' // Updated to match backend port
+      '/api': 'http://localhost:5000', // Proxy API to local backend
+      '/uploads': 'http://localhost:5000' // Proxy uploads to local backend
     }
   }
 });
