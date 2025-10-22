@@ -17,22 +17,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# OS files
-.DS_Store
-Thumbs.db
+# Client build output (should not be committed)
+client/dist/
 
-# env
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.vite/
-.cache/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# Uploads
+server/uploads/
 
 # OS files
 .DS_Store
@@ -44,4 +33,7 @@ Thumbs.db
 .env.development.local
 .env.test.local
 .env.production.local
->>>>>>> 8992e8d (chore: sync workspace)
+
+# OS files
+.DS_Store
+Thumbs.db
