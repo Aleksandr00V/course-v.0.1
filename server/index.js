@@ -83,18 +83,47 @@ function readDb() {
     }
     if (!fs.existsSync(DB_PATH)) {
       try {
-        fs.writeFileSync(DB_PATH, JSON.stringify({ vehicles: [] }, null, 2));
+        fs.writeFileSync(DB_PATH, JSON.stringify({ vehicles: [], drivers: [], users: [] }, null, 2));
       } catch (e) {
         // cannot write to disk, switch to in-memory
         console.warn('Cannot initialize DB on disk, switching to in-memory DB:', e && e.message);
         readOnlyFs = true;
-        inMemoryDb = { vehicles: [] };
+        inMemoryDb = { vehicles: [], drivers: [], users: [] };
         return migrateToVehicles(inMemoryDb);
       }
     }
     const raw = fs.readFileSync(DB_PATH, 'utf-8');
-    const parsed = JSON.parse(raw || '{"vehicles": [], "drivers": [], "users": []}');
-    return migrateToVehicles(parsed);
+    try {
+      const parsed = JSON.parse(raw || '{"vehicles": [], "drivers": [], "users": []}');
+      return migrateToVehicles(parsed);
+    } catch (parseErr) {
+      console.warn('DB parse failed, attempting sanitization:', parseErr && parseErr.message);
+      // Try to sanitize common JSON problems: strip control chars, remove /* */ and // comments, remove trailing commas
+      let sanitized = String(raw || '').replace(/[\x00-\x1F]/g, '');
+      // remove block comments
+      sanitized = sanitized.replace(/\/\*[\s\S]*?\*\//g, '');
+      // remove line comments
+      sanitized = sanitized.replace(/(^|[^:])\/\/.*$/gm, '$1');
+      // remove trailing commas before } or ]
+      sanitized = sanitized.replace(/,\s*([}\]])/g, '$1');
+      try {
+        const parsed2 = JSON.parse(sanitized || '{"vehicles": [], "drivers": [], "users": []}');
+        console.log('DB sanitized parse succeeded; overwriting DB file with cleaned JSON');
+        try {
+          fs.writeFileSync(DB_PATH, JSON.stringify(parsed2, null, 2));
+        } catch (e) {
+          console.warn('Failed to write sanitized DB back to disk:', e && e.message);
+          readOnlyFs = true;
+          inMemoryDb = parsed2;
+        }
+        return migrateToVehicles(parsed2);
+      } catch (parseErr2) {
+        console.error('Sanitized parse also failed:', parseErr2 && parseErr2.message);
+        readOnlyFs = true;
+        inMemoryDb = inMemoryDb || { vehicles: [], drivers: [], users: [] };
+        return migrateToVehicles(inMemoryDb);
+      }
+    }
   } catch (e) {
     console.warn('Failed to read DB from disk, using in-memory DB:', e && e.message);
     readOnlyFs = true;
