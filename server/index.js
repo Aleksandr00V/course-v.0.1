@@ -18,8 +18,15 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Multer setup for file uploads
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR);
+let uploadsEnabled = true;
+try {
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR);
+  }
+} catch (e) {
+  // If we cannot create uploads (serverless read-only fs), disable upload handling
+  console.warn('Uploads disabled: cannot create uploads directory:', e && e.message);
+  uploadsEnabled = false;
 }
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
@@ -64,22 +71,50 @@ function migrateToVehicles(db) {
   return { vehicles: [], drivers: db.drivers || [], users: db.users || [] };
 }
 
+// If running in a serverless environment the FS can be read-only. Use an in-memory
+// fallback DB when writes fail.
+let inMemoryDb = null;
+let readOnlyFs = false;
+
 function readDb() {
   try {
+    if (readOnlyFs && inMemoryDb) {
+      return migrateToVehicles(inMemoryDb);
+    }
     if (!fs.existsSync(DB_PATH)) {
-      fs.writeFileSync(DB_PATH, JSON.stringify({ vehicles: [] }, null, 2));
+      try {
+        fs.writeFileSync(DB_PATH, JSON.stringify({ vehicles: [] }, null, 2));
+      } catch (e) {
+        // cannot write to disk, switch to in-memory
+        console.warn('Cannot initialize DB on disk, switching to in-memory DB:', e && e.message);
+        readOnlyFs = true;
+        inMemoryDb = { vehicles: [] };
+        return migrateToVehicles(inMemoryDb);
+      }
     }
     const raw = fs.readFileSync(DB_PATH, 'utf-8');
     const parsed = JSON.parse(raw || '{"vehicles": [], "drivers": [], "users": []}');
     return migrateToVehicles(parsed);
   } catch (e) {
-    console.error('Failed to read DB:', e);
-    return { vehicles: [], drivers: [], users: [] };
+    console.warn('Failed to read DB from disk, using in-memory DB:', e && e.message);
+    readOnlyFs = true;
+    inMemoryDb = inMemoryDb || { vehicles: [], drivers: [], users: [] };
+    return migrateToVehicles(inMemoryDb);
   }
 }
 
 function writeDb(data) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+  try {
+    if (readOnlyFs) {
+      inMemoryDb = data;
+      return;
+    }
+    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.warn('Failed to write DB to disk, switching to in-memory DB:', e && e.message);
+    readOnlyFs = true;
+    inMemoryDb = data;
+  }
 }
 
 function ensureSeedUser() {
@@ -565,6 +600,7 @@ app.delete('/api/drivers/:id', requireAuth(['admin', 'superadmin']), (req, res) 
 // Upload driver photo and attach URL to driver
 app.post('/api/drivers/:id/photo', requireAuth(['admin', 'superadmin']), upload.single('photo'), (req, res) => {
   const { id } = req.params;
+  if (!uploadsEnabled) return res.status(503).json({ message: 'Uploads not available in this environment' });
   if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
   const db = readDb();
   const idx = (db.drivers || []).findIndex((x) => x.id == id);
