@@ -95,12 +95,22 @@ try {
 console.log('Server startup:', { NODE_ENV: process.env.NODE_ENV || 'undefined', JWT_SECRET_set: !!process.env.JWT_SECRET });
 
 // If running in a serverless environment the FS can be read-only. Use an in-memory
-// fallback DB when writes fail.
+// fallback DB when writes fail. On Vercel we force readOnlyFs to true and prefer the
+// packaged `defaultDb` to avoid synchronous disk operations during cold starts.
 let inMemoryDb = null;
 let readOnlyFs = false;
+if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+  readOnlyFs = true;
+  console.log('Environment indicates serverless/production — forcing readOnlyFs=true');
+}
 
 function readDb() {
   try {
+    // If we have a packaged defaultDb and we're in read-only/serverless mode,
+    // prefer returning that immediately to avoid sync FS operations.
+    if (readOnlyFs && defaultDb) {
+      return defaultDb;
+    }
     if (readOnlyFs && inMemoryDb) {
       return migrateToVehicles(inMemoryDb);
     }
