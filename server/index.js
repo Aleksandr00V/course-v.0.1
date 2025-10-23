@@ -108,9 +108,30 @@ app.put('/api/users/:id', async (req, res) => { try { const doc = await User.fin
 app.delete('/api/users/:id', async (req, res) => { try { await User.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
 
 // Trips CRUD
-app.get('/api/trips', async (req, res) => { try { res.json(await Trip.find().lean()); } catch (e) { res.status(500).json({ message: e.message }); }});
+app.get('/api/trips', async (req, res) => { 
+  try { 
+    const filter = {};
+    if (req.query.driverId) filter.driverId = req.query.driverId;
+    if (req.query.vehicleId) filter.vehicleId = req.query.vehicleId;
+    
+    const trips = await Trip.find(filter).lean();
+    res.json(trips);
+  } catch (e) { 
+    res.status(500).json({ message: e.message }); 
+  }
+});
 app.get('/api/trips/:id', async (req, res) => { try { const it = await Trip.findOne({ id: req.params.id }).lean(); if(!it) return res.status(404).json({message:'Not found'}); res.json(it);} catch (e){res.status(500).json({message:e.message})}});
-app.post('/api/trips', async (req, res) => { try { const item = req.body||{}; item.id = item.id||String(Date.now()); if(item.date) item.date = new Date(item.date); const doc = await Trip.create(item); res.status(201).json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.post('/api/trips', async (req, res) => { 
+  try { 
+    const item = req.body || {};
+    item.id = item.id || String(Date.now());
+    item.date = item.date ? new Date(item.date) : new Date();
+    const doc = await Trip.create(item);
+    res.status(201).json(doc);
+  } catch(e) {
+    res.status(500).json({message: e.message})
+  }
+});
 app.put('/api/trips/:id', async (req, res) => { try { if(req.body.date) req.body.date = new Date(req.body.date); const doc = await Trip.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); if(!doc) return res.status(404).json({message:'Not found'}); res.json(doc);}catch(e){res.status(500).json({message:e.message})}});
 app.delete('/api/trips/:id', async (req, res) => { try { await Trip.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
 
