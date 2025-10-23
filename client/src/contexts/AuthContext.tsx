@@ -15,7 +15,7 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const http = axios.create({ baseURL: '/api' });
+const http = axios.create({ baseURL: import.meta.env.VITE_API_BASE || '/api' });
 http.interceptors.request.use((config) => {
   const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
