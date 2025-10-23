@@ -178,7 +178,7 @@ export default function UsersPage() {
               </form>
             </div>
           </div>
-          </div>
+        </div>
         )}
         <div className={user.role === 'superadmin' ? 'col-12 col-lg-8' : 'col-12'}>
           {loading ? (
