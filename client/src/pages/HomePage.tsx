@@ -2,27 +2,28 @@ import { AppNavbar } from '../components/Navbar';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useEffect, useState } from 'react';
-import { requestsApi, api as vehiclesApi, driversApi } from '../lib/api';
-import type { RequestItem } from '../lib/api';
+import { requestsApi, api as vehiclesApi, driversApi, usersApi } from '../lib/api';
+import type { RequestItem, SafeUser } from '../lib/api';
 
 export default function HomePage() {
   const { user } = useAuth();
   const [vehicles, setVehicles] = useState<Array<{ id: string; make: string; model: string; registrationNumber: string }>>([]);
-  const [drivers, setDrivers] = useState<Array<{ id: string; firstName: string; lastName: string }>>([]);
+  const [users, setUsers] = useState<SafeUser[]>([]);
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [vehicleId, setVehicleId] = useState('');
   const [driverId, setDriverId] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [departAt, setDepartAt] = useState('');
+  const [kilometers, setKilometers] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const [vs, ds] = await Promise.all([vehiclesApi.list(), driversApi.list()]);
+        const [vs, us] = await Promise.all([vehiclesApi.list(), usersApi.list()]);
         setVehicles(vs.map(v => ({ id: v.id, make: v.make, model: v.model, registrationNumber: v.registrationNumber })));
-        setDrivers(ds.map(d => ({ id: d.id, firstName: d.firstName, lastName: d.lastName })));
+        setUsers(us);
         if (user?.role === 'admin' || user?.role === 'superadmin') {
           const rs = await requestsApi.list();
           setRequests(rs);
@@ -37,12 +38,52 @@ export default function HomePage() {
     e.preventDefault();
     setError(null);
     if (!vehicleId || !driverId || !from.trim() || !to.trim()) return;
-    const iso = departAt ? new Date(departAt).toISOString() : new Date().toISOString();
-    const payload = { vehicleId, driverId, from, to, departAt: iso, notes: '' };
+    
+    // Перевірка дати - не раніше сьогодні
+    const selectedDate = departAt ? new Date(departAt) : new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (selectedDate < today) {
+      setError('Дата виїзду не може бути раніше сьогодні');
+      return;
+    }
+    
+    // Перевірка, що на обрану дату немає активних поїздок для цього водія чи авто
+    const selectedDateOnly = new Date(selectedDate);
+    selectedDateOnly.setHours(0, 0, 0, 0);
+    const nextDay = new Date(selectedDateOnly);
+    nextDay.setDate(nextDay.getDate() + 1);
+    
+    const conflictRequest = requests.find(r => {
+      const requestDate = new Date(r.departAt);
+      requestDate.setHours(0, 0, 0, 0);
+      return (
+        (r.driverId === driverId || r.vehicleId === vehicleId) &&
+        (r.status === 'planned' || r.status === 'in-progress') &&
+        requestDate.getTime() === selectedDateOnly.getTime()
+      );
+    });
+    
+    if (conflictRequest) {
+      const conflictType = conflictRequest.driverId === driverId ? 'користувач' : 'автомобіль';
+      setError(`Цей ${conflictType} уже має активну поїздку на цю дату`);
+      return;
+    }
+    
+    const iso = selectedDate.toISOString();
+    const payload = { 
+      vehicleId, 
+      driverId, 
+      from, 
+      to, 
+      departAt: iso, 
+      kilometers: kilometers ? parseInt(kilometers) : undefined,
+      notes: '' 
+    };
     try {
       const created = await requestsApi.create(payload as any);
       setRequests((prev) => [created, ...prev]);
-      setVehicleId(''); setDriverId(''); setFrom(''); setTo(''); setDepartAt('');
+      setVehicleId(''); setDriverId(''); setFrom(''); setTo(''); setDepartAt(''); setKilometers('');
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Помилка створення заявки');
     }
@@ -51,16 +92,24 @@ export default function HomePage() {
     const v = vehicles.find(x => x.id === id);
     return v ? `${v.make} ${v.model} (${v.registrationNumber})` : id;
   }
-  function nameDriver(id: string) {
-    const d = drivers.find(x => x.id === id);
-    return d ? `${d.lastName} ${d.firstName}` : id;
+  function nameUser(id: string) {
+    const u = users.find(x => x.id === id);
+    return u ? `${u.name || u.email}` : id;
   }
-  async function setStatus(id: string, status: RequestItem['status']) {
+  async function updateRequest(id: string, updates: Partial<RequestItem>) {
     try {
-      const next = await requestsApi.update(id, { status });
-      setRequests((prev) => prev.map(r => r.id === id ? next : r));
+      const updated = await requestsApi.update(id, updates);
+      setRequests((prev) => prev.map(r => r.id === id ? updated : r));
     } catch (e: any) {
-      setError(e?.response?.data?.message || 'Не вдалося оновити статус');
+      setError(e?.response?.data?.message || 'Не вдалося оновити заявку');
+    }
+  }
+  async function deleteRequest(id: string) {
+    try {
+      await requestsApi.remove(id);
+      setRequests((prev) => prev.filter(r => r.id !== id));
+    } catch (e: any) {
+      setError(e?.response?.data?.message || 'Не вдалося видалити заявку');
     }
   }
   return (
@@ -120,17 +169,28 @@ export default function HomePage() {
                       </select>
                     </div>
                     <div className="col-12 col-md-4">
-                      <label className="form-label">Водій</label>
+                      <label className="form-label">Користувач</label>
                       <select className="form-select" value={driverId} onChange={(e) => setDriverId(e.target.value)}>
-                        <option value="">— Оберіть водія —</option>
-                        {drivers.map(d => (
-                          <option key={d.id} value={d.id}>{d.lastName} {d.firstName}</option>
+                        <option value="">— Оберіть користувача —</option>
+                        {users
+                          .filter(u => !requests.some(r => 
+                            r.driverId === u.id && 
+                            (r.status === 'planned' || r.status === 'in-progress')
+                          ))
+                          .map(u => (
+                          <option key={u.id} value={u.id}>{u.name || u.email}</option>
                         ))}
                       </select>
                     </div>
                     <div className="col-12 col-md-4">
                       <label className="form-label">Час виїзду</label>
-                      <input className="form-control" type="datetime-local" value={departAt} onChange={(e) => setDepartAt(e.target.value)} />
+                      <input 
+                        className="form-control" 
+                        type="datetime-local" 
+                        value={departAt} 
+                        min={new Date().toISOString().slice(0, 16)}
+                        onChange={(e) => setDepartAt(e.target.value)} 
+                      />
                     </div>
                     <div className="col-12 col-md-6">
                       <label className="form-label">Звідки</label>
@@ -139,6 +199,10 @@ export default function HomePage() {
                     <div className="col-12 col-md-6">
                       <label className="form-label">Куди</label>
                       <input className="form-control" value={to} onChange={(e) => setTo(e.target.value)} />
+                    </div>
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Кілометраж</label>
+                      <input className="form-control" type="number" placeholder="км" value={kilometers} onChange={(e) => setKilometers(e.target.value)} />
                     </div>
                     <div className="col-12">
                       <button className="btn btn-primary" type="submit">Створити заявку</button>
@@ -156,22 +220,41 @@ export default function HomePage() {
                       {requests.map(r => {
                         const actions = (
                           <div className="d-flex gap-1">
-                            {r.status === 'planned' && (
-                              <button className="btn btn-sm btn-outline-primary" onClick={() => setStatus(r.id, 'in-progress')}>Старт</button>
-                            )}
-                            {r.status !== 'done' && (
-                              <button className="btn btn-sm btn-outline-success" onClick={() => setStatus(r.id, 'done')}>Завершити</button>
-                            )}
-                            {r.status !== 'canceled' && (
-                              <button className="btn btn-sm btn-outline-danger" onClick={() => setStatus(r.id, 'canceled')}>Скасувати</button>
-                            )}
+                            <button 
+                              className="btn btn-sm btn-outline-primary" 
+                              onClick={() => {
+                                const newArriveAt = prompt('Введіть час приїзду (YYYY-MM-DD HH:MM):', 
+                                  new Date().toISOString().slice(0, 16).replace('T', ' '));
+                                if (newArriveAt) {
+                                  const isoDate = new Date(newArriveAt).toISOString();
+                                  updateRequest(r.id, { arriveAt: isoDate, status: 'done' });
+                                }
+                              }}
+                              disabled={r.status === 'done' || r.status === 'canceled'}
+                            >
+                              Редагувати
+                            </button>
+                            <button 
+                              className="btn btn-sm btn-outline-danger" 
+                              onClick={() => {
+                                if (confirm('Видалити цю заявку?')) {
+                                  deleteRequest(r.id);
+                                }
+                              }}
+                            >
+                              Видалити
+                            </button>
                           </div>
                         );
                         return (
                           <div key={r.id} className="list-group-item d-flex justify-content-between align-items-center">
                             <div>
                               <div className="fw-semibold">{new Date(r.departAt).toLocaleString()} — {nameVehicle(r.vehicleId)}</div>
-                              <div className="text-secondary small">{nameDriver(r.driverId)} · {r.from} → {r.to}</div>
+                              <div className="text-secondary small">
+                                {nameUser(r.driverId)} · {r.from} → {r.to}
+                                {r.kilometers && ` · ${r.kilometers} км`}
+                                {r.arriveAt && ` · Приїхав: ${new Date(r.arriveAt).toLocaleString()}`}
+                              </div>
                             </div>
                             <div className="d-flex align-items-center gap-2">
                               <span className="badge text-bg-secondary text-capitalize">{r.status}</span>

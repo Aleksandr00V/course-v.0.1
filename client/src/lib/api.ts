@@ -125,6 +125,8 @@ export type RequestItem = {
   from: string;
   to: string;
   departAt: string;
+  arriveAt?: string;
+  kilometers?: number;
   status: 'planned' | 'in-progress' | 'done' | 'canceled';
   notes?: string;
   createdAt: string;

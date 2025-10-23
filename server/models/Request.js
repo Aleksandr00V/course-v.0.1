@@ -7,6 +7,8 @@ const RequestSchema = new Schema({
   from: String,
   to: String,
   departAt: Date,
+  arriveAt: Date,
+  kilometers: Number,
   status: String,
   notes: String,
   createdAt: Date
