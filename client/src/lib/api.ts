@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { Vehicle, Driver, Trip } from '../types';
 import { getToken } from './auth';
 
-const http = axios.create({ baseURL: import.meta.env.VITE_API_BASE || '/api' });
+const http = axios.create({ baseURL: 'https://course-v-0-1-2.onrender.com/api' });
 http.interceptors.request.use((config) => {
   const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
