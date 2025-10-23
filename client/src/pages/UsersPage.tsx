@@ -193,7 +193,7 @@ export default function UsersPage() {
                         <button 
                           className="btn btn-link p-0 text-start fw-semibold"
                           onClick={() => openEditModal(u)}
-                          style={{ textDecoration: 'none' }}
+                          style={{ textDecoration: 'none', cursor: 'pointer' }}
                         >
                           {u.email}
                         </button>
