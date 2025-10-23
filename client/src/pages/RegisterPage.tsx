@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { AppNavbar } from '../components/Navbar';
 import axios from 'axios';
 
+const http = axios.create({ baseURL: 'https://course-v-0-1-2.onrender.com/api' });
+
 export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -46,7 +48,7 @@ export default function RegisterPage() {
     setError(null);
     if (!validateFields()) return;
     try {
-      await axios.post('/api/auth/register', { email, password, lastName, firstName, middleName, position });
+      await http.post('/auth/register', { email, password, lastName, firstName, middleName, position });
       setDone(true);
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Помилка реєстрації');
