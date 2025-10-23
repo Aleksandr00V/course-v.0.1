@@ -39,6 +39,12 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+// Log all requests
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}${req.query && Object.keys(req.query).length ? ' with query: ' + JSON.stringify(req.query) : ''}`);
+  next();
+});
+
 // Serve uploads statically
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 try { if (!require('fs').existsSync(UPLOADS_DIR)) require('fs').mkdirSync(UPLOADS_DIR); } catch (e) { console.warn('Uploads dir:', e && e.message); }
@@ -100,23 +106,110 @@ app.post('/api/drivers', async (req, res) => { try { const item = req.body || {}
 app.put('/api/drivers/:id', async (req, res) => { try { const doc = await Driver.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); if(!doc) return res.status(404).json({message:'Not found'}); res.json(doc);}catch(e){res.status(500).json({message:e.message})}});
 app.delete('/api/drivers/:id', async (req, res) => { try { await Driver.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
 
-// Users CRUD
-app.get('/api/users', async (req, res) => { try { res.json(await User.find().lean()); } catch (e) { res.status(500).json({ message: e.message }); }});
-app.get('/api/users/:id', async (req, res) => { try { const it = await User.findOne({ id: req.params.id }).lean(); if(!it) return res.status(404).json({message:'Not found'}); res.json(it);} catch (e){res.status(500).json({message:e.message})}});
-app.post('/api/users', async (req, res) => { try { const item = req.body||{}; item.id = item.id||String(Date.now()); const doc = await User.create(item); res.status(201).json(doc);}catch(e){res.status(500).json({message:e.message})}});
-app.put('/api/users/:id', async (req, res) => { try { const doc = await User.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); if(!doc) return res.status(404).json({message:'Not found'}); res.json(doc);}catch(e){res.status(500).json({message:e.message})}});
-app.delete('/api/users/:id', async (req, res) => { try { await User.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
+// Users CRUD (secured)
+app.get('/api/users', requireAuth, async (req, res) => { 
+  try { 
+    // Тільки адміни можуть бачити користувачів
+    if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const users = await User.find().select('-password').lean(); 
+    res.json(users); 
+  } catch (e) { 
+    res.status(500).json({ message: e.message }); 
+  }
+});
+
+app.get('/api/users/:id', requireAuth, async (req, res) => { 
+  try { 
+    // Тільки адміни або сам користувач можуть бачити деталі
+    if (req.user.role !== 'admin' && req.user.role !== 'superadmin' && req.user.id !== req.params.id) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const user = await User.findOne({ id: req.params.id }).select('-password').lean(); 
+    if(!user) return res.status(404).json({message:'Not found'}); 
+    res.json(user);
+  } catch (e){
+    res.status(500).json({message:e.message})
+  }
+});
+
+app.post('/api/users', requireAuth, async (req, res) => { 
+  try { 
+    // Тільки супер адміни можуть створювати користувачів
+    if (req.user.role !== 'superadmin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const item = req.body||{}; 
+    item.id = item.id||String(Date.now()); 
+    
+    // Хешуємо пароль
+    if (item.password) {
+      item.password = await bcrypt.hash(item.password, 10);
+    }
+    
+    const doc = await User.create(item); 
+    const safeDoc = { ...doc.toObject() };
+    delete safeDoc.password;
+    res.status(201).json(safeDoc);
+  } catch(e) {
+    res.status(500).json({message:e.message})
+  }
+});
+
+app.put('/api/users/:id', requireAuth, async (req, res) => { 
+  try { 
+    // Тільки супер адміни або сам користувач можуть редагувати
+    if (req.user.role !== 'superadmin' && req.user.id !== req.params.id) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const updateData = { ...req.body };
+    
+    // Хешуємо пароль якщо він надається
+    if (updateData.password) {
+      updateData.password = await bcrypt.hash(updateData.password, 10);
+    }
+    
+    const doc = await User.findOneAndUpdate({id:req.params.id}, updateData, {new:true}).select('-password').lean(); 
+    if(!doc) return res.status(404).json({message:'Not found'}); 
+    res.json(doc);
+  } catch(e) {
+    res.status(500).json({message:e.message})
+  }
+});
+
+app.delete('/api/users/:id', requireAuth, async (req, res) => { 
+  try { 
+    // Тільки супер адміни можуть видаляти користувачів
+    if (req.user.role !== 'superadmin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    await User.deleteOne({id:req.params.id}); 
+    res.status(204).send(); 
+  } catch(e) {
+    res.status(500).json({message:e.message})
+  }
+});
 
 // Trips CRUD
 app.get('/api/trips', async (req, res) => { 
   try { 
+    console.log('GET /api/trips called with query:', req.query);
     const filter = {};
     if (req.query.driverId) filter.driverId = req.query.driverId;
     if (req.query.vehicleId) filter.vehicleId = req.query.vehicleId;
     
+    console.log('Trip filter:', filter);
     const trips = await Trip.find(filter).lean();
+    console.log('Found trips:', trips.length);
     res.json(trips);
   } catch (e) { 
+    console.error('Error in GET /api/trips:', e);
     res.status(500).json({ message: e.message }); 
   }
 });
