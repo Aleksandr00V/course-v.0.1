@@ -17,6 +17,12 @@ export default function HomePage() {
   const [departAt, setDepartAt] = useState('');
   const [kilometers, setKilometers] = useState('');
   const [error, setError] = useState<string | null>(null);
+  
+  // Модальне вікно для завершення поїздки
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [selectedRequestId, setSelectedRequestId] = useState('');
+  const [arriveAtInput, setArriveAtInput] = useState('');
+  const [arriveError, setArriveError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -37,36 +43,35 @@ export default function HomePage() {
   async function createRequest(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!vehicleId || !driverId || !from.trim() || !to.trim()) return;
-    
-    // Перевірка дати - не раніше сьогодні
-    const selectedDate = departAt ? new Date(departAt) : new Date();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (selectedDate < today) {
-      setError('Дата виїзду не може бути раніше сьогодні');
+    if (!vehicleId || !driverId || !from.trim() || !to.trim()) {
+      setError('Заповніть всі обов\'язкові поля');
       return;
     }
     
-    // Перевірка, що на обрану дату немає активних поїздок для цього водія чи авто
-    const selectedDateOnly = new Date(selectedDate);
-    selectedDateOnly.setHours(0, 0, 0, 0);
-    const nextDay = new Date(selectedDateOnly);
-    nextDay.setDate(nextDay.getDate() + 1);
+    // Перевірка дати - не раніше сьогодні
+    const selectedDate = departAt ? new Date(departAt) : new Date();
+    const now = new Date();
+    if (selectedDate < now) {
+      setError('Дата та час виїзду не можуть бути раніше поточного моменту');
+      return;
+    }
     
+    // Перевірка конфліктів - чи не зайняті водій та авто в той самий час
     const conflictRequest = requests.find(r => {
+      if (r.status === 'done' || r.status === 'canceled') return false;
+      
       const requestDate = new Date(r.departAt);
-      requestDate.setHours(0, 0, 0, 0);
-      return (
-        (r.driverId === driverId || r.vehicleId === vehicleId) &&
-        (r.status === 'planned' || r.status === 'in-progress') &&
-        requestDate.getTime() === selectedDateOnly.getTime()
-      );
+      const timeDiff = Math.abs(selectedDate.getTime() - requestDate.getTime());
+      const hoursDiff = timeDiff / (1000 * 60 * 60);
+      
+      // Перевіряємо конфлікт, якщо різниця менше 4 годин
+      return (r.driverId === driverId || r.vehicleId === vehicleId) && hoursDiff < 4;
     });
     
     if (conflictRequest) {
       const conflictType = conflictRequest.driverId === driverId ? 'користувач' : 'автомобіль';
-      setError(`Цей ${conflictType} уже має активну поїздку на цю дату`);
+      const conflictTime = new Date(conflictRequest.departAt).toLocaleString();
+      setError(`${conflictType} вже зайнятий поблизу цього часу (${conflictTime}). Мінімальний інтервал: 4 години`);
       return;
     }
     
@@ -100,6 +105,27 @@ export default function HomePage() {
     try {
       const updated = await requestsApi.update(id, updates);
       setRequests((prev) => prev.map(r => r.id === id ? updated : r));
+      
+      // Якщо заявку завершено і є кілометраж, додаємо до пробігу авто
+      if (updates.status === 'done' && updated.kilometers && updated.vehicleId) {
+        try {
+          // Отримуємо повні дані авто
+          const fullVehicle = await vehiclesApi.get(updated.vehicleId);
+          await vehiclesApi.update(updated.vehicleId, { 
+            mileage: (fullVehicle.mileage || 0) + updated.kilometers 
+          });
+          // Оновлюємо локальний стан авто
+          const updatedVehicles = await vehiclesApi.list();
+          setVehicles(updatedVehicles.map(v => ({ 
+            id: v.id, 
+            make: v.make, 
+            model: v.model, 
+            registrationNumber: v.registrationNumber 
+          })));
+        } catch (e) {
+          console.error('Не вдалося оновити пробіг авто:', e);
+        }
+      }
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Не вдалося оновити заявку');
     }
@@ -110,6 +136,86 @@ export default function HomePage() {
       setRequests((prev) => prev.filter(r => r.id !== id));
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Не вдалося видалити заявку');
+    }
+  }
+  
+  function openCompleteModal(requestId: string) {
+    setSelectedRequestId(requestId);
+    
+    // Знаходимо заявку та встановлюємо час приїзду як час виїзду + 30 хвилин
+    const request = requests.find(r => r.id === requestId);
+    let defaultArriveTime = new Date().toISOString().slice(0, 16);
+    
+    if (request) {
+      const departTime = new Date(request.departAt);
+      const arriveTime = new Date(departTime.getTime() + 30 * 60 * 1000); // +30 хвилин
+      const now = new Date();
+      
+      // Якщо час виїзду + 30 хвилин не в майбутньому, використовуємо його
+      if (arriveTime <= now) {
+        defaultArriveTime = arriveTime.toISOString().slice(0, 16);
+      }
+    }
+    
+    setArriveAtInput(defaultArriveTime);
+    setArriveError(null);
+    setShowCompleteModal(true);
+  }
+  
+  function closeCompleteModal() {
+    setShowCompleteModal(false);
+    setSelectedRequestId('');
+    setArriveAtInput('');
+    setArriveError(null);
+  }
+  
+  async function handleCompleteTrip() {
+    if (!arriveAtInput) {
+      setArriveError('Введіть час приїзду');
+      return;
+    }
+    
+    const arriveDate = new Date(arriveAtInput);
+    const request = requests.find(r => r.id === selectedRequestId);
+    
+    if (!request) {
+      setArriveError('Заявку не знайдено');
+      return;
+    }
+    
+    const departDate = new Date(request.departAt);
+    
+    console.log('Debug info:');
+    console.log('arriveAtInput:', arriveAtInput);
+    console.log('arriveDate:', arriveDate);
+    console.log('request.departAt:', request.departAt);
+    console.log('departDate:', departDate);
+    console.log('arriveDate < departDate:', arriveDate < departDate);
+    
+    // Перевіряємо, що час приїзду не раніше часу виїзду (порівнюємо мілісекунди)
+    const arriveTime = arriveDate.getTime();
+    const departTime = departDate.getTime();
+    
+    if (arriveTime < departTime) {
+      setArriveError(`Час приїзду не може бути раніше часу виїзду (${departDate.toLocaleString()}). Ви ввели: ${arriveDate.toLocaleString()}`);
+      return;
+    }
+    
+    // Перевіряємо, що час приїзду не в майбутньому
+    const now = new Date();
+    if (arriveDate > now) {
+      setArriveError('Час приїзду не може бути в майбутньому');
+      return;
+    }
+    
+    try {
+      await updateRequest(selectedRequestId, { 
+        arriveAt: arriveDate.toISOString(), 
+        status: 'done' 
+      });
+      closeCompleteModal();
+    } catch (e: any) {
+      setArriveError(e?.response?.data?.message || 'Не вдалося завершити поїздку');
     }
   }
   return (
@@ -173,10 +279,13 @@ export default function HomePage() {
                       <select className="form-select" value={driverId} onChange={(e) => setDriverId(e.target.value)}>
                         <option value="">— Оберіть користувача —</option>
                         {users
-                          .filter(u => !requests.some(r => 
-                            r.driverId === u.id && 
-                            (r.status === 'planned' || r.status === 'in-progress')
-                          ))
+                          .filter(u => {
+                            // Не показуємо користувачів, які вже мають активні заявки
+                            return !requests.some(r => 
+                              r.driverId === u.id && 
+                              (r.status === 'planned' || r.status === 'in-progress')
+                            );
+                          })
                           .map(u => (
                           <option key={u.id} value={u.id}>{u.name || u.email}</option>
                         ))}
@@ -220,20 +329,14 @@ export default function HomePage() {
                       {requests.map(r => {
                         const actions = (
                           <div className="d-flex gap-1">
-                            <button 
-                              className="btn btn-sm btn-outline-primary" 
-                              onClick={() => {
-                                const newArriveAt = prompt('Введіть час приїзду (YYYY-MM-DD HH:MM):', 
-                                  new Date().toISOString().slice(0, 16).replace('T', ' '));
-                                if (newArriveAt) {
-                                  const isoDate = new Date(newArriveAt).toISOString();
-                                  updateRequest(r.id, { arriveAt: isoDate, status: 'done' });
-                                }
-                              }}
-                              disabled={r.status === 'done' || r.status === 'canceled'}
-                            >
-                              Редагувати
-                            </button>
+                            {r.status !== 'done' && r.status !== 'canceled' && (
+                              <button 
+                                className="btn btn-sm btn-outline-success" 
+                                onClick={() => openCompleteModal(r.id)}
+                              >
+                                Завершити поїздку
+                              </button>
+                            )}
                             <button 
                               className="btn btn-sm btn-outline-danger" 
                               onClick={() => {
@@ -273,6 +376,44 @@ export default function HomePage() {
           </>
         )}
       </div>
+      
+      {/* Модальне вікно для завершення поїздки */}
+      {showCompleteModal && (
+        <div className="modal d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Завершити поїздку</h5>
+                <button type="button" className="btn-close" onClick={closeCompleteModal}></button>
+              </div>
+              <div className="modal-body">
+                {arriveError && <div className="alert alert-danger">{arriveError}</div>}
+                <div className="mb-3">
+                  <label className="form-label">Час приїзду</label>
+                  <input 
+                    type="datetime-local" 
+                    className="form-control"
+                    value={arriveAtInput}
+                    onChange={(e) => setArriveAtInput(e.target.value)}
+                    max={new Date().toISOString().slice(0, 16)}
+                  />
+                  <div className="form-text">
+                    Час приїзду може дорівнювати часу виїзду (миттєва поїздка) або бути пізніше, але не в майбутньому
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={closeCompleteModal}>
+                  Скасувати
+                </button>
+                <button type="button" className="btn btn-success" onClick={handleCompleteTrip}>
+                  Завершити поїздку
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

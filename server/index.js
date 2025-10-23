@@ -117,10 +117,24 @@ app.delete('/api/trips/:id', async (req, res) => { try { await Trip.deleteOne({i
 // Requests CRUD
 app.get('/api/requests', async (req, res) => { try { res.json(await Request.find().lean()); } catch (e) { res.status(500).json({ message: e.message }); }});
 app.get('/api/requests/:id', async (req, res) => { try { const it = await Request.findOne({ id: req.params.id }).lean(); if(!it) return res.status(404).json({message:'Not found'}); res.json(it);} catch (e){res.status(500).json({message:e.message})}});
-app.post('/api/requests', async (req, res) => { try { const item = req.body||{}; item.id = item.id||String(Date.now()); if(item.departAt) item.departAt = new Date(item.departAt); if(item.createdAt) item.createdAt = new Date(item.createdAt); const doc = await Request.create(item); res.status(201).json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.post('/api/requests', async (req, res) => { 
+  try { 
+    const item = req.body||{}; 
+    item.id = item.id||String(Date.now()); 
+    if(item.departAt) item.departAt = new Date(item.departAt); 
+    if(item.arriveAt) item.arriveAt = new Date(item.arriveAt); 
+    item.createdAt = item.createdAt ? new Date(item.createdAt) : new Date();
+    item.status = item.status || 'planned';
+    const doc = await Request.create(item); 
+    res.status(201).json(doc);
+  }catch(e){
+    res.status(500).json({message:e.message})
+  }
+});
 app.put('/api/requests/:id', async (req, res) => { 
   try { 
     if(req.body.departAt) req.body.departAt = new Date(req.body.departAt); 
+    if(req.body.arriveAt) req.body.arriveAt = new Date(req.body.arriveAt);
     if(req.body.createdAt) req.body.createdAt = new Date(req.body.createdAt); 
     
     const oldDoc = await Request.findOne({id:req.params.id}).lean();
@@ -128,8 +142,9 @@ app.put('/api/requests/:id', async (req, res) => {
     
     const doc = await Request.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); 
     
-    // Якщо статус змінився на 'done', створюємо Trip
+    // Якщо статус змінився на 'done', створюємо Trip та оновлюємо пробіг авто
     if (oldDoc.status !== 'done' && req.body.status === 'done' && doc.kilometers) {
+      console.log(`Creating trip for request ${doc.id}, kilometers: ${doc.kilometers}`);
       const tripItem = {
         id: String(Date.now()),
         driverId: doc.driverId,
@@ -139,6 +154,14 @@ app.put('/api/requests/:id', async (req, res) => {
         notes: `${doc.from} → ${doc.to}`
       };
       await Trip.create(tripItem);
+      
+      // Оновлюємо пробіг автомобіля
+      const vehicle = await Vehicle.findOne({id: doc.vehicleId}).lean();
+      if (vehicle) {
+        const newMileage = (vehicle.mileage || 0) + doc.kilometers;
+        console.log(`Updating vehicle ${vehicle.id} mileage from ${vehicle.mileage || 0} to ${newMileage}`);
+        await Vehicle.findOneAndUpdate({id: doc.vehicleId}, {mileage: newMileage});
+      }
     }
     
     res.json(doc);
