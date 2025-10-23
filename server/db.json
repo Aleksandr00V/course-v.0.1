@@ -13,6 +13,20 @@
       "mileage": 32500,
       "notes": "Планове ТО кожні 10 тис. км"
     }
+    ,
+    {
+      "id": "V-002",
+      "make": "Toyota",
+      "model": "Hilux",
+      "type": "пікап",
+      "status": "active",
+      "assignedUnit": "Рота розвідки",
+      "vin": "TOY-HILUX-0002",
+      "registrationNumber": "ВЧ-5678",
+      "year": 2020,
+      "mileage": 12000,
+      "notes": "Обладнано для патрульних операцій"
+    }
   ],
   "drivers": [
     {
@@ -26,6 +40,19 @@
       "notes": "Водій КрАЗ-6322",
       "fixedSpeed": 60,
       "distance": 150
+    }
+    ,
+    {
+      "id": "D-002",
+      "firstName": "Петро",
+      "lastName": "Іваненко",
+      "fullName": "Петро Іваненко",
+      "licenseNumber": "CD987654",
+      "rank": "м-р",
+      "phone": "+380501223344",
+      "notes": "Водій Toyota Hilux",
+      "fixedSpeed": 80,
+      "distance": 300
     }
   ],
   "users": [
@@ -98,6 +125,16 @@
       "status": "pending",
       "passwordHash": "$2a$10$6SyYFuywWsX5RG6mu5lmkePWZ00qGbvzSS9C9RmGVmaNkjc7C8wi6"
     }
+    ,
+    {
+      "id": "1762000000001",
+      "email": "test.user@example.com",
+      "name": "Тестовий Користувач",
+      "role": "user",
+      "position": "Водій",
+      "status": "active",
+      "passwordHash": "$2a$10$examplehashforuser"
+    }
   ],
   "trips": [
     {
@@ -123,6 +160,15 @@
       "date": "2025-10-19T20:01:44.285Z",
       "distanceKm": 150,
       "notes": ""
+    }
+    ,
+    {
+      "id": "1762000001001",
+      "driverId": "D-002",
+      "vehicleId": "V-002",
+      "date": "2025-10-22T09:00:00.000Z",
+      "distanceKm": 45,
+      "notes": "Тестовий рейс: пункт А → пункт Б"
     }
   ],
   "requests": [
@@ -158,6 +204,18 @@
       "status": "done",
       "notes": "",
       "createdAt": "2025-10-19T19:58:44.186Z"
+    }
+    ,
+    {
+      "id": "1762000002001",
+      "vehicleId": "V-002",
+      "driverId": "D-002",
+      "from": "Київ",
+      "to": "Бровари",
+      "departAt": "2025-10-22T10:30:00.000Z",
+      "status": "scheduled",
+      "notes": "Тестова заявка",
+      "createdAt": "2025-10-21T12:00:00.000Z"
     }
   ]
 }

@@ -1,918 +1,216 @@
+// Express server with MongoDB (mongoose) CRUD endpoints
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
+const multer = require('multer');
+
+const { connectMongo } = require('./lib/mongoose');
+const Vehicle = require('./models/Vehicle');
+const Driver = require('./models/Driver');
+const User = require('./models/User');
+const Trip = require('./models/Trip');
+const Request = require('./models/Request');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
+
+function signToken(user) {
+  return jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+function requireAuth(req, res, next) {
+  const auth = req.headers && req.headers.authorization;
+  if (!auth) return res.status(401).json({ message: 'Unauthorized' });
+  const parts = auth.split(' ');
+  if (parts.length !== 2 || parts[0] !== 'Bearer') return res.status(401).json({ message: 'Unauthorized' });
+  try {
+    const payload = jwt.verify(parts[1], JWT_SECRET);
+    req.user = payload;
+    return next();
+  } catch (e) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const DB_PATH = path.join(__dirname, 'db.json');
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-change-me';
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const multer = require('multer');
 
 app.use(cors());
 app.use(express.json());
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Multer setup for file uploads
+// Serve uploads statically
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
-let uploadsEnabled = true;
-try {
-  if (!fs.existsSync(UPLOADS_DIR)) {
-    fs.mkdirSync(UPLOADS_DIR);
-  }
-} catch (e) {
-  // If we cannot create uploads (serverless read-only fs), disable upload handling
-  console.warn('Uploads disabled: cannot create uploads directory:', e && e.message);
-  uploadsEnabled = false;
-}
+try { if (!require('fs').existsSync(UPLOADS_DIR)) require('fs').mkdirSync(UPLOADS_DIR); } catch (e) { console.warn('Uploads dir:', e && e.message); }
+app.use('/uploads', express.static(UPLOADS_DIR));
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.bin';
-    cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
-  },
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.round(Math.random()*1e9)}${path.extname(file.originalname) || '.bin'}`),
 });
 const upload = multer({ storage });
 
-// Helper to sanitize any stray control characters used as arrows in notes
-function sanitizeArrows(text) {
-  try {
-    return String(text)
-      // replace control-char + '2' (e.g., \x19 2) with a proper arrow
-      .replace(/[\x00-\x1F]2/g, ' → ')
-      // also normalize ASCII arrow to unicode arrow for consistency
-      .replace(/\s->\s/g, ' → ');
-  } catch {
-    return text;
-  }
-}
-
-function migrateToVehicles(db) {
-  if (db.vehicles && Array.isArray(db.vehicles)) return db;
-  if (db.equipment && Array.isArray(db.equipment)) {
-    const vehicles = db.equipment.map((e) => ({
-      id: e.id || Date.now().toString(),
-      make: e.make || '',
-      model: e.name || '',
-      type: e.category || '',
-      status: e.status === 'repair' ? 'repair' : e.status === 'available' || e.status === 'in-use' ? 'in-service' : 'decommissioned',
-      assignedUnit: e.owner || '',
-      vin: e.serial || '',
-      registrationNumber: e.registrationNumber || '',
-      year: e.year || '',
-      mileage: e.mileage || 0,
-      notes: e.notes || '',
-    }));
-    return { vehicles, drivers: db.drivers || [], users: db.users || [] };
-  }
-  return { vehicles: [], drivers: db.drivers || [], users: db.users || [] };
-}
-
-// Try to load a packaged default DB at startup as a fallback (helps serverless deployments)
-let defaultDb = null;
-try {
-  const rawDefault = fs.readFileSync(DB_PATH, 'utf-8');
-  defaultDb = JSON.parse(rawDefault || '{"vehicles": [], "drivers": [], "users": []}');
-  defaultDb = migrateToVehicles(defaultDb);
-  console.log('Loaded default DB from disk, keys:', Object.keys(defaultDb));
-} catch (e) {
-  // Try to load packaged JSON via static require which ensures bundlers include the file
-  try {
-    // Static require so tools like vercel/node include the JSON in the function bundle
-    // eslint-disable-next-line global-require
-    const pkg = require('./db.json');
-    defaultDb = migrateToVehicles(pkg || { vehicles: [], drivers: [], users: [] });
-    console.log('Loaded default DB via static require, keys:', Object.keys(defaultDb));
-  } catch (e2) {
-    console.warn('No default DB loaded at startup (maybe serverless):', e && e.message, e2 && e2.message);
-  }
-}
-
-// Startup trace to help debugging on serverless platforms
-console.log('Server startup:', { NODE_ENV: process.env.NODE_ENV || 'undefined', JWT_SECRET_set: !!process.env.JWT_SECRET });
-
-// If running in a serverless environment the FS can be read-only. Use an in-memory
-// fallback DB when writes fail. On Vercel we force readOnlyFs to true and prefer the
-// packaged `defaultDb` to avoid synchronous disk operations during cold starts.
-let inMemoryDb = null;
-let readOnlyFs = false;
-if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-  readOnlyFs = true;
-  console.log('Environment indicates serverless/production — forcing readOnlyFs=true');
-}
-
-function readDb() {
-  try {
-    // If we have a packaged defaultDb and we're in read-only/serverless mode,
-    // prefer returning that immediately to avoid sync FS operations.
-    if (readOnlyFs && defaultDb) {
-      return defaultDb;
-    }
-    if (readOnlyFs && inMemoryDb) {
-      return migrateToVehicles(inMemoryDb);
-    }
-    if (!fs.existsSync(DB_PATH)) {
-      try {
-        fs.writeFileSync(DB_PATH, JSON.stringify({ vehicles: [], drivers: [], users: [] }, null, 2));
-      } catch (e) {
-        // cannot write to disk, switch to in-memory
-        console.warn('Cannot initialize DB on disk, switching to in-memory DB:', e && e.message);
-        readOnlyFs = true;
-        inMemoryDb = { vehicles: [], drivers: [], users: [] };
-        return migrateToVehicles(inMemoryDb);
-      }
-    }
-    const raw = fs.readFileSync(DB_PATH, 'utf-8');
-    try {
-      const parsed = JSON.parse(raw || '{"vehicles": [], "drivers": [], "users": []}');
-      const migrated = migrateToVehicles(parsed);
-      // If parsed DB exists but is empty, and we have a packaged defaultDb with data, prefer that
-      if (
-        defaultDb &&
-        Array.isArray(defaultDb.vehicles) &&
-        defaultDb.vehicles.length > 0 &&
-        Array.isArray(migrated.vehicles) &&
-        migrated.vehicles.length === 0
-      ) {
-        console.log('Parsed DB empty — returning packaged defaultDb instead');
-        return defaultDb;
-      }
-      return migrated;
-    } catch (parseErr) {
-      console.warn('DB parse failed, attempting sanitization:', parseErr && parseErr.message);
-      // Try to sanitize common JSON problems: strip control chars, remove /* */ and // comments, remove trailing commas
-      let sanitized = String(raw || '').replace(/[\x00-\x1F]/g, '');
-      // remove block comments
-      sanitized = sanitized.replace(/\/\*[\s\S]*?\*\//g, '');
-      // remove line comments
-      sanitized = sanitized.replace(/(^|[^:])\/\/.*$/gm, '$1');
-      // remove trailing commas before } or ]
-      sanitized = sanitized.replace(/,\s*([}\]])/g, '$1');
-      try {
-        const parsed2 = JSON.parse(sanitized || '{"vehicles": [], "drivers": [], "users": []}');
-        console.log('DB sanitized parse succeeded; overwriting DB file with cleaned JSON');
-        try {
-          fs.writeFileSync(DB_PATH, JSON.stringify(parsed2, null, 2));
-        } catch (e) {
-          console.warn('Failed to write sanitized DB back to disk:', e && e.message);
-          readOnlyFs = true;
-          inMemoryDb = parsed2;
-        }
-        return migrateToVehicles(parsed2);
-      } catch (parseErr2) {
-        console.error('Sanitized parse also failed:', parseErr2 && parseErr2.message);
-        readOnlyFs = true;
-        inMemoryDb = inMemoryDb || { vehicles: [], drivers: [], users: [] };
-        return migrateToVehicles(inMemoryDb);
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to read DB from disk, using in-memory DB:', e && e.message);
-    readOnlyFs = true;
-    inMemoryDb = inMemoryDb || { vehicles: [], drivers: [], users: [] };
-    const migrated = migrateToVehicles(inMemoryDb);
-    console.log('readDb -> inMemory fallback, keys:', Object.keys(migrated));
-    // If migrated is empty but we loaded a packaged defaultDb, use that as fallback
-    if (defaultDb && Array.isArray(defaultDb.vehicles) && defaultDb.vehicles.length > 0 && (!migrated.vehicles || migrated.vehicles.length === 0)) {
-      console.log('Using packaged defaultDb because in-memory DB is empty');
-      return defaultDb;
-    }
-    return migrated;
-  }
-}
-
-function writeDb(data) {
-  try {
-    if (readOnlyFs) {
-      inMemoryDb = data;
-      return;
-    }
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.warn('Failed to write DB to disk, switching to in-memory DB:', e && e.message);
-    readOnlyFs = true;
-    inMemoryDb = data;
-  }
-}
-
-function ensureSeedUser() {
-  const db = readDb();
-  db.users = db.users || [];
-  const hasSuper = db.users.some((u) => u.role === 'superadmin');
-  if (hasSuper) return;
-  // if user with email admin@local exists, promote to superadmin (no duplicate)
-  const adminEmail = 'admin@local';
-  const idx = db.users.findIndex((u) => (u.email || '').toLowerCase() === adminEmail);
-  if (idx !== -1) {
-    db.users[idx].role = 'superadmin';
-    writeDb(db);
-    console.log('Promoted existing admin@local to superadmin');
-    return;
-  }
-  const passwordHash = bcrypt.hashSync('admin123', 10);
-  db.users.push({
-    id: Date.now().toString(),
-    email: adminEmail,
-    role: 'superadmin',
-    passwordHash,
-    name: 'Адміністратор',
-  });
-  writeDb(db);
-  console.log('Seeded default superadmin: admin@local / admin123');
-}
-ensureSeedUser();
-
-// Ensure unique users by email (case-insensitive) and normalize to lowercase
-function ensureUsersUnique() {
-  const db = readDb();
-  const users = db.users || [];
-  const roleRank = { user: 1, admin: 2, superadmin: 3 };
-  const map = new Map();
-  let changed = false;
-  for (const u of users) {
-    const email = (u.email || '').toLowerCase();
-    if (email !== u.email) changed = true;
-    const existing = map.get(email);
-    if (!existing) {
-      map.set(email, { ...u, email });
-    } else {
-      // Keep higher role; if equal, keep the first
-      const keep = roleRank[existing.role] >= roleRank[u.role] ? existing : { ...u, email };
-      if (keep !== existing) changed = true;
-      map.set(email, keep);
-    }
-  }
-  if (changed || map.size !== users.length) {
-    db.users = Array.from(map.values());
-    writeDb(db);
-    console.log('Normalized users: emails lowercased, duplicates merged');
-  }
-}
-ensureUsersUnique();
-
-// Ensure each user has a status: 'active' | 'pending' | 'rejected'
-function ensureUsersStatus() {
-  const db = readDb();
-  const users = db.users || [];
-  let changed = false;
-  for (const u of users) {
-    if (!u.status) {
-      // Existing users default to 'active'
-      u.status = 'active';
-      changed = true;
-    }
-  }
-  if (changed) {
-    writeDb(db);
-    console.log('Normalized users: added default status=active');
-  }
-}
-ensureUsersStatus();
-
-function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-}
-
-function requireAuth(allowedRoles = []) {
-  return (req, res, next) => {
-    const auth = req.headers.authorization || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    if (!token) return res.status(401).json({ message: 'Unauthorized' });
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      req.user = decoded;
-      if (allowedRoles.length && !allowedRoles.includes(decoded.role)) {
-        return res.status(403).json({ message: 'Forbidden' });
-      }
-      next();
-    } catch (e) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-  };
-}
-
 // Health
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
-});
+app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-// Debug endpoint to inspect DB loading behavior in serverless/runtime
-app.get('/api/debug-db', (req, res) => {
+// Vehicles CRUD
+app.get('/api/vehicles', async (req, res) => {
   try {
-    const fileExists = fs.existsSync(DB_PATH);
-    let fileSize = null;
-    if (fileExists) {
-      try {
-        const st = fs.statSync(DB_PATH);
-        fileSize = st.size;
-      } catch (e) {
-        // ignore
-      }
-    }
-
-    const db = readDb();
-    res.json({
-      ok: true,
-      nodeEnv: process.env.NODE_ENV || null,
-      readOnlyFs: !!readOnlyFs,
-      dbPath: DB_PATH,
-      fileExists,
-      fileSize,
-      defaultDbLoaded: !!defaultDb,
-      defaultDbKeys: defaultDb ? Object.keys(defaultDb) : [],
-      inMemoryDbKeys: inMemoryDb ? Object.keys(inMemoryDb) : [],
-      returnedDbKeys: db ? Object.keys(db) : [],
-      vehiclesCount: Array.isArray(db.vehicles) ? db.vehicles.length : 0,
-      driversCount: Array.isArray(db.drivers) ? db.drivers.length : 0,
-      usersCount: Array.isArray(db.users) ? db.users.length : 0,
-    });
-  } catch (err) {
-    console.error('/api/debug-db error:', err && err.stack ? err.stack : err);
-    res.status(500).json({ message: 'Failed to inspect DB', error: String(err) });
-  }
+    const items = await Vehicle.find().sort({ id: 1 }).lean();
+    res.json(items);
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// Ensure trips array exists
-function ensureTripsArray() {
-  const db = readDb();
-  if (!Array.isArray(db.trips)) {
-    db.trips = [];
-    writeDb(db);
-  }
-}
-ensureTripsArray();
-
-// Ensure requests array exists
-function ensureRequestsArray() {
-  const db = readDb();
-  if (!Array.isArray(db.requests)) {
-    db.requests = [];
-    writeDb(db);
-  }
-}
-ensureRequestsArray();
-
-// One-time migration to clean up any bad arrow characters in trip notes
-function ensureTripsNotesClean() {
-  const db = readDb();
-  let changed = false;
-  if (Array.isArray(db.trips)) {
-    db.trips = db.trips.map((t) => {
-      const nextNotes = sanitizeArrows(t.notes || '');
-      if (nextNotes !== (t.notes || '')) {
-        changed = true;
-        return { ...t, notes: nextNotes };
-      }
-      return t;
-    });
-  }
-  if (changed) {
-    writeDb(db);
-    console.log('Sanitized trip notes arrows');
-  }
-}
-ensureTripsNotesClean();
-
-// Seed a few vehicles if none exist
-function ensureSeedVehicles() {
-  const db = readDb();
-  if (!Array.isArray(db.vehicles) || db.vehicles.length > 0) return;
-  const now = Date.now();
-  db.vehicles = [
-    { id: String(now), make: 'КрАЗ', model: '6322', type: 'вантажівка', status: 'base', assignedUnit: 'Рота забезпечення', vin: 'KRAZ-6322-0001', registrationNumber: 'ВЧ-1234', year: 2018, mileage: 32500, notes: '' },
-    { id: String(now + 1), make: 'ЗІЛ', model: '131', type: 'вантажівка', status: 'base', assignedUnit: 'Рота забезпечення', vin: 'ZIL-131-0002', registrationNumber: 'ВЧ-2234', year: 1990, mileage: 120000, notes: '' },
-    { id: String(now + 2), make: 'УАЗ', model: '469', type: 'позашляховик', status: 'base', assignedUnit: 'Штаб', vin: 'UAZ-469-0003', registrationNumber: 'ВЧ-3234', year: 1985, mileage: 80000, notes: '' },
-  ];
-  writeDb(db);
-  console.log('Seeded sample vehicles');
-}
-ensureSeedVehicles();
-
-// Auth
-app.post('/api/auth/register', (req, res) => {
+app.get('/api/vehicles/:id', async (req, res) => {
   try {
-    let { email, password, lastName, firstName, middleName, position } = req.body || {};
-    if (!email || !password || !lastName || !firstName || !middleName || !position) {
-      return res.status(400).json({ message: 'All fields are required: email, password, lastName, firstName, middleName, position' });
-    }
-    email = String(email).trim().toLowerCase();
-    const db = readDb();
-    const exists = (db.users || []).some((u) => (u.email || '').toLowerCase() === email);
-    if (exists) return res.status(409).json({ message: 'User already exists' });
-    const passwordHash = bcrypt.hashSync(password, 10);
-    const name = `${lastName} ${firstName} ${middleName}`.trim();
-    const user = { id: Date.now().toString(), email, name, role: 'user', position, status: 'pending', passwordHash };
-    db.users.push(user);
-    writeDb(db);
-    res.status(201).json({ ok: true, status: 'pending', user: { id: user.id, email: user.email, role: user.role, name: user.name, position: user.position } });
-  } catch (err) {
-    console.error('/api/auth/register error:', err && err.stack ? err.stack : err);
-    res.status(500).json({ message: 'Internal server error' });
-  }
+    const it = await Vehicle.findOne({ id: req.params.id }).lean();
+    if (!it) return res.status(404).json({ message: 'Not found' });
+    res.json(it);
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/vehicles', async (req, res) => {
   try {
-    let { email, password } = req.body || {};
-    const db = readDb();
-    email = String(email || '').toLowerCase();
-    const user = (db.users || []).find((u) => (u.email || '').toLowerCase() === email);
-    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
-    const ok = bcrypt.compareSync(password || '', user.passwordHash);
-    if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
-    if (user.status && user.status !== 'active') {
-      if (user.status === 'pending') return res.status(403).json({ message: 'Account pending approval' });
-      if (user.status === 'rejected') return res.status(403).json({ message: 'Account rejected' });
-    }
-    const token = signToken({ id: user.id, email: user.email, role: user.role, name: user.name });
-    res.json({ token, user: { id: user.id, email: user.email, role: user.role, name: user.name } });
-  } catch (err) {
-    console.error('/api/auth/login error:', err && err.stack ? err.stack : err);
-    res.status(500).json({ message: 'Internal server error' });
-  }
+    const payload = req.body || {};
+    payload.id = payload.id || String(Date.now());
+    const doc = await Vehicle.create(payload);
+    res.status(201).json(doc);
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// Self profile
-app.get('/api/me', requireAuth(), (req, res) => {
-  const db = readDb();
-  const user = (db.users || []).find((u) => u.id == req.user.id);
-  if (!user) return res.status(404).json({ message: 'Not found' });
-  const { passwordHash, ...safe } = user;
-  res.json(safe);
-});
-
-app.put('/api/me', requireAuth(), (req, res) => {
-  const db = readDb();
-  const idx = (db.users || []).findIndex((u) => u.id == req.user.id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  const { email, name, password } = req.body || {};
-  const update = { ...db.users[idx] };
-  if (typeof name !== 'undefined') update.name = name;
-  if (email) {
-    const lower = String(email).trim().toLowerCase();
-    const conflict = (db.users || []).some((u) => u.id != req.user.id && (u.email || '').toLowerCase() === lower);
-    if (conflict) return res.status(409).json({ message: 'Email already in use' });
-    update.email = lower;
-  }
-  if (password) update.passwordHash = bcrypt.hashSync(password, 10);
-  db.users[idx] = update;
-  writeDb(db);
-  // return new token to reflect potential email/name changes
-  const token = signToken({ id: update.id, email: update.email, role: update.role, name: update.name });
-  const { passwordHash, ...safe } = update;
-  res.json({ token, user: safe });
-});
-
-// Pending registrations for admin/superadmin
-app.get('/api/registrations', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const db = readDb();
-  const pending = (db.users || []).filter((u) => u.status === 'pending').map(({ passwordHash, ...u }) => u);
-  res.json(pending);
-});
-
-app.post('/api/users/:id/approve', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const db = readDb();
-  const idx = (db.users || []).findIndex((u) => u.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  db.users[idx].status = 'active';
-  writeDb(db);
-  const { passwordHash, ...safe } = db.users[idx];
-  res.json(safe);
-});
-
-app.post('/api/users/:id/reject', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const db = readDb();
-  const idx = (db.users || []).findIndex((u) => u.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  db.users[idx].status = 'rejected';
-  writeDb(db);
-  const { passwordHash, ...safe } = db.users[idx];
-  res.json(safe);
-});
-
-// Users management (superadmin only)
-app.get('/api/users', requireAuth(['superadmin']), (req, res) => {
-  const db = readDb();
-  const users = (db.users || []).map(({ passwordHash, ...u }) => u);
-  res.json(users);
-});
-
-app.post('/api/users', requireAuth(['superadmin']), (req, res) => {
-  const { email, lastName, firstName, middleName, role, password } = req.body;
-  const db = readDb();
-
-  if (db.users.some((u) => u.email === email)) {
-    return res.status(400).json({ message: 'User already exists' });
-  }
-
-  const passwordHash = bcrypt.hashSync(password, 10);
-  const newUser = {
-    id: Date.now().toString(),
-    email,
-    lastName,
-    firstName,
-    middleName,
-    role: role || 'user',
-    status: 'active',
-    passwordHash,
-    createdAt: Date.now() // Unix Time in milliseconds
-  };
-
-  db.users.push(newUser);
-  writeDb(db);
-
-  res.status(201).json({ message: 'User created successfully', user: newUser });
-});
-
-app.put('/api/users/:id', requireAuth(['superadmin']), (req, res) => {
-  const { id } = req.params;
-  let { email, name, role, password } = req.body || {};
-  const db = readDb();
-  const idx = (db.users || []).findIndex((u) => u.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  if (role && !['user', 'admin', 'superadmin'].includes(role)) return res.status(400).json({ message: 'Invalid role' });
-  const update = { ...db.users[idx] };
-  if (email) {
-    email = String(email).trim().toLowerCase();
-    const conflict = (db.users || []).some((u) => u.id != id && (u.email || '').toLowerCase() === email);
-    if (conflict) return res.status(409).json({ message: 'Email already in use' });
-    update.email = email;
-  }
-  if (typeof name !== 'undefined') update.name = name;
-  if (role) update.role = role;
-  if (password) update.passwordHash = bcrypt.hashSync(password, 10);
-  db.users[idx] = update;
-  writeDb(db);
-  const { passwordHash, ...safe } = db.users[idx];
-  res.json(safe);
-});
-
-app.delete('/api/users/:id', requireAuth(['superadmin']), (req, res) => {
-  const { id } = req.params;
-  const db = readDb();
-  const list = db.users || [];
-  const idx = list.findIndex((u) => u.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  // Prevent self-delete for current superadmin
-  if (req.user && String(req.user.id) === String(id)) return res.status(400).json({ message: 'You cannot delete yourself' });
-  // Prevent deleting last superadmin
-  const deleting = list[idx];
-  if (deleting.role === 'superadmin') {
-    const superCount = list.filter((u) => u.role === 'superadmin').length;
-    if (superCount <= 1) return res.status(400).json({ message: 'Cannot delete the last superadmin' });
-  }
-  db.users = list.filter((u) => u.id != id);
-  writeDb(db);
-  res.status(204).send();
-});
-
-// Update user role and position (superadmin only)
-function updateUserRole(req, res) {
-  const { userId, newRole, newPosition } = req.body;
-  const db = readDb();
-  const user = db.users.find((u) => u.id === userId);
-
-  if (!user) {
-    return res.status(404).json({ message: 'User not found' });
-  }
-
-  if (!['Водій', 'Старший Водій', 'Механік водій', 'Начальник автослужби', 'Старший технік автопарку'].includes(newPosition)) {
-    return res.status(400).json({ message: 'Invalid position' });
-  }
-
-  user.role = newRole;
-  user.position = newPosition;
-  writeDb(db);
-
-  res.json({ message: 'User role and position updated successfully', user });
-}
-
-app.put('/api/users/:id/role', requireAuth(['superadmin']), updateUserRole);
-
-// List vehicles
-app.get('/api/vehicles', (req, res) => {
+app.put('/api/vehicles/:id', async (req, res) => {
   try {
-    const db = readDb();
-    console.log('/api/vehicles db keys:', Object.keys(db));
-    const vehicles = Array.isArray(db.vehicles) ? db.vehicles : [];
-    res.json(vehicles);
-  } catch (err) {
-    console.error('/api/vehicles error:', err && err.stack ? err.stack : err);
-    res.status(500).json({ message: 'Internal server error' });
-  }
+    const doc = await Vehicle.findOneAndUpdate({ id: req.params.id }, req.body, { new: true }).lean();
+    if (!doc) return res.status(404).json({ message: 'Not found' });
+    res.json(doc);
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-app.get('/api/vehicles/:id', (req, res) => {
-  const db = readDb();
-  const it = (db.vehicles || []).find((v) => v.id == req.params.id);
-  if (!it) return res.status(404).json({ message: 'Not found' });
-  res.json(it);
-});
-
-// Create vehicle
-app.post('/api/vehicles', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const db = readDb();
-  const item = req.body || {};
-  if (!item.make || !item.model || !item.registrationNumber) {
-    return res.status(400).json({ message: 'make, model, registrationNumber are required' });
-  }
-  item.id = item.id || Date.now().toString();
-  // Normalize status to our set: base | trip | repair
-  const allowed = ['base', 'trip', 'repair'];
-  const legacyMap = { 'in-service': 'base', 'decommissioned': 'base', repair: 'repair' };
-  const rawStatus = item.status || 'base';
-  const normalized = allowed.includes(rawStatus) ? rawStatus : (legacyMap[rawStatus] || 'base');
-  item.status = normalized;
-  db.vehicles.push(item);
-  writeDb(db);
-  res.status(201).json(item);
-});
-
-// Update vehicle
-app.put('/api/vehicles/:id', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const update = req.body || {};
-  const db = readDb();
-  const idx = (db.vehicles || []).findIndex((e) => e.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  if (typeof update.status !== 'undefined') {
-    const allowed = ['base', 'trip', 'repair'];
-    const legacyMap = { 'in-service': 'base', 'decommissioned': 'base', repair: 'repair' };
-    const rawStatus = update.status;
-    update.status = allowed.includes(rawStatus) ? rawStatus : (legacyMap[rawStatus] || db.vehicles[idx].status || 'base');
-  }
-  db.vehicles[idx] = { ...db.vehicles[idx], ...update, id: db.vehicles[idx].id };
-  writeDb(db);
-  res.json(db.vehicles[idx]);
-});
-
-// Delete vehicle
-app.delete('/api/vehicles/:id', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const db = readDb();
-  const before = db.vehicles.length;
-  db.vehicles = (db.vehicles || []).filter((e) => e.id != id);
-  if (db.vehicles.length === before) return res.status(404).json({ message: 'Not found' });
-  writeDb(db);
-  res.status(204).send();
+app.delete('/api/vehicles/:id', async (req, res) => {
+  try {
+    await Vehicle.deleteOne({ id: req.params.id });
+    res.status(204).send();
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 // Drivers CRUD
-app.get('/api/drivers', (req, res) => {
+app.get('/api/drivers', async (req, res) => { try { res.json(await Driver.find().lean()); } catch (e) { res.status(500).json({ message: e.message }); }});
+app.get('/api/drivers/:id', async (req, res) => { try { const it = await Driver.findOne({ id: req.params.id }).lean(); if(!it) return res.status(404).json({message:'Not found'}); res.json(it);} catch(e){res.status(500).json({message:e.message})}});
+app.post('/api/drivers', async (req, res) => { try { const item = req.body || {}; item.id = item.id || String(Date.now()); const doc = await Driver.create(item); res.status(201).json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.put('/api/drivers/:id', async (req, res) => { try { const doc = await Driver.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); if(!doc) return res.status(404).json({message:'Not found'}); res.json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.delete('/api/drivers/:id', async (req, res) => { try { await Driver.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
+
+// Users CRUD
+app.get('/api/users', async (req, res) => { try { res.json(await User.find().lean()); } catch (e) { res.status(500).json({ message: e.message }); }});
+app.get('/api/users/:id', async (req, res) => { try { const it = await User.findOne({ id: req.params.id }).lean(); if(!it) return res.status(404).json({message:'Not found'}); res.json(it);} catch (e){res.status(500).json({message:e.message})}});
+app.post('/api/users', async (req, res) => { try { const item = req.body||{}; item.id = item.id||String(Date.now()); const doc = await User.create(item); res.status(201).json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.put('/api/users/:id', async (req, res) => { try { const doc = await User.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); if(!doc) return res.status(404).json({message:'Not found'}); res.json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.delete('/api/users/:id', async (req, res) => { try { await User.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
+
+// Trips CRUD
+app.get('/api/trips', async (req, res) => { try { res.json(await Trip.find().lean()); } catch (e) { res.status(500).json({ message: e.message }); }});
+app.get('/api/trips/:id', async (req, res) => { try { const it = await Trip.findOne({ id: req.params.id }).lean(); if(!it) return res.status(404).json({message:'Not found'}); res.json(it);} catch (e){res.status(500).json({message:e.message})}});
+app.post('/api/trips', async (req, res) => { try { const item = req.body||{}; item.id = item.id||String(Date.now()); if(item.date) item.date = new Date(item.date); const doc = await Trip.create(item); res.status(201).json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.put('/api/trips/:id', async (req, res) => { try { if(req.body.date) req.body.date = new Date(req.body.date); const doc = await Trip.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); if(!doc) return res.status(404).json({message:'Not found'}); res.json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.delete('/api/trips/:id', async (req, res) => { try { await Trip.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
+
+// Requests CRUD
+app.get('/api/requests', async (req, res) => { try { res.json(await Request.find().lean()); } catch (e) { res.status(500).json({ message: e.message }); }});
+app.get('/api/requests/:id', async (req, res) => { try { const it = await Request.findOne({ id: req.params.id }).lean(); if(!it) return res.status(404).json({message:'Not found'}); res.json(it);} catch (e){res.status(500).json({message:e.message})}});
+app.post('/api/requests', async (req, res) => { try { const item = req.body||{}; item.id = item.id||String(Date.now()); if(item.departAt) item.departAt = new Date(item.departAt); if(item.createdAt) item.createdAt = new Date(item.createdAt); const doc = await Request.create(item); res.status(201).json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.put('/api/requests/:id', async (req, res) => { try { if(req.body.departAt) req.body.departAt = new Date(req.body.departAt); if(req.body.createdAt) req.body.createdAt = new Date(req.body.createdAt); const doc = await Request.findOneAndUpdate({id:req.params.id}, req.body, {new:true}).lean(); if(!doc) return res.status(404).json({message:'Not found'}); res.json(doc);}catch(e){res.status(500).json({message:e.message})}});
+app.delete('/api/requests/:id', async (req, res) => { try { await Request.deleteOne({id:req.params.id}); res.status(204).send(); }catch(e){res.status(500).json({message:e.message})}});
+
+// Auth: login / register
+app.post('/api/auth/login', async (req, res) => {
   try {
-    const db = readDb();
-    console.log('/api/drivers db keys:', Object.keys(db));
-    const users = Array.isArray(db.users) ? db.users : [];
-    const drivers = users
-      .filter(user => user.position === 'Водій')
-      .map(user => ({
-        id: user.id,
-        firstName: user.name.split(' ')[1] || '',
-        lastName: user.name.split(' ')[0] || '',
-        position: user.position,
-        phone: user.phone || '',
-        email: user.email
-      }));
-    res.json(drivers);
-  } catch (err) {
-    console.error('/api/drivers error:', err && err.stack ? err.stack : err);
-    res.status(500).json({ message: 'Internal server error' });
-  }
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
+    const user = await User.findOne({ email }).lean();
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.status && user.status !== 'active') return res.status(403).json({ message: 'Account not active' });
+    const ok = await bcrypt.compare(password, user.passwordHash || '');
+    if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
+    const token = signToken(user);
+    res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, position: user.position } });
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-app.get('/api/drivers/:id', (req, res) => {
-  const db = readDb();
-  const it = (db.drivers || []).find((d) => d.id == req.params.id);
-  if (!it) return res.status(404).json({ message: 'Not found' });
-  res.json(it);
-});
-
-app.post('/api/drivers', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const db = readDb();
-  const d = req.body || {};
-  if (!d.firstName || !d.lastName || !d.licenseNumber) {
-    return res.status(400).json({ message: 'firstName, lastName, licenseNumber are required' });
-  }
-  d.id = d.id || Date.now().toString();
-  db.drivers = db.drivers || [];
-  db.drivers.push(d);
-  writeDb(db);
-  res.status(201).json(d);
-});
-
-app.put('/api/drivers/:id', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const update = req.body || {};
-  const db = readDb();
-  const idx = (db.drivers || []).findIndex((x) => x.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  db.drivers[idx] = { ...db.drivers[idx], ...update, id: db.drivers[idx].id };
-  writeDb(db);
-  res.json(db.drivers[idx]);
-});
-
-app.delete('/api/drivers/:id', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const db = readDb();
-  const list = db.drivers || [];
-  const idx = list.findIndex((x) => x.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  const removed = list[idx];
-  // Attempt to delete associated photo file if exists
-  if (removed && removed.photoUrl && typeof removed.photoUrl === 'string') {
-    try {
-      const filename = removed.photoUrl.startsWith('/uploads/') ? removed.photoUrl.replace('/uploads/', '') : null;
-      if (filename) {
-        const filePath = path.join(__dirname, 'uploads', filename);
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }
-    } catch {}
-  }
-  db.drivers = list.filter((x) => x.id != id);
-  writeDb(db);
-  res.status(204).send();
-});
-
-// Upload driver photo and attach URL to driver
-app.post('/api/drivers/:id/photo', requireAuth(['admin', 'superadmin']), upload.single('photo'), (req, res) => {
-  const { id } = req.params;
-  if (!uploadsEnabled) return res.status(503).json({ message: 'Uploads not available in this environment' });
-  if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-  const db = readDb();
-  const idx = (db.drivers || []).findIndex((x) => x.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  const fileUrl = `/uploads/${req.file.filename}`;
-  db.drivers[idx] = { ...db.drivers[idx], photoUrl: fileUrl };
-  writeDb(db);
-  res.json({ photoUrl: fileUrl });
-});
-
-// Trips: { id, driverId, vehicleId, date, distanceKm, notes }
-app.get('/api/trips', requireAuth(), (req, res) => {
-  const { driverId, vehicleId } = req.query || {};
-  const db = readDb();
-  let trips = db.trips || [];
-  if (driverId) trips = trips.filter((t) => String(t.driverId) === String(driverId));
-  if (vehicleId) trips = trips.filter((t) => String(t.vehicleId) === String(vehicleId));
-  res.json(trips);
-});
-
-app.post('/api/trips', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { driverId, vehicleId, date, distanceKm, notes } = req.body || {};
-  if (!driverId || !vehicleId || !distanceKm) return res.status(400).json({ message: 'driverId, vehicleId, distanceKm are required' });
-  const db = readDb();
-  const driver = (db.drivers || []).find((d) => d.id == driverId);
-  const vehicle = (db.vehicles || []).find((v) => v.id == vehicleId);
-  if (!driver || !vehicle) return res.status(400).json({ message: 'Invalid driver or vehicle' });
-  const trip = {
-    id: Date.now().toString(),
-    driverId,
-    vehicleId,
-    date: date || new Date().toISOString(),
-    distanceKm: Number(distanceKm),
-    notes: notes || '',
-  };
-  db.trips = db.trips || [];
-  db.trips.push(trip);
-  writeDb(db);
-  res.status(201).json(trip);
-});
-
-// Requests: planned dispatches { id, vehicleId, driverId, from, to, departAt, status, notes, createdAt }
-app.get('/api/requests', requireAuth(), (req, res) => {
-  const db = readDb();
-  res.json(db.requests || []);
-});
-
-app.post('/api/requests', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { vehicleId, driverId, from, to, departAt, notes } = req.body || {};
-  if (!vehicleId || !driverId || !from || !to) return res.status(400).json({ message: 'vehicleId, driverId, from, to are required' });
-  const db = readDb();
-  const driver = (db.drivers || []).find((d) => d.id == driverId);
-  const vehicle = (db.vehicles || []).find((v) => v.id == vehicleId);
-  if (!driver || !vehicle) return res.status(400).json({ message: 'Invalid driver or vehicle' });
-  const reqItem = {
-    id: Date.now().toString(),
-    vehicleId,
-    driverId,
-    from: String(from),
-    to: String(to),
-    departAt: departAt || new Date().toISOString(),
-    status: 'planned',
-    notes: notes || '',
-    createdAt: new Date().toISOString(),
-  };
-  db.requests = db.requests || [];
-  db.requests.push(reqItem);
-  writeDb(db);
-  res.status(201).json(reqItem);
-});
-
-app.put('/api/requests/:id', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const { status, notes, from, to, departAt, driverId, vehicleId } = req.body || {};
-  const db = readDb();
-  const idx = (db.requests || []).findIndex((r) => r.id == id);
-  if (idx === -1) return res.status(404).json({ message: 'Not found' });
-  const allowedStatus = ['planned', 'in-progress', 'done', 'canceled'];
-  const prev = { ...db.requests[idx] };
-  const update = { ...prev };
-  if (status) {
-    if (!allowedStatus.includes(status)) return res.status(400).json({ message: 'Invalid status' });
-    update.status = status;
-  }
-  if (typeof notes !== 'undefined') update.notes = String(notes);
-  if (typeof from !== 'undefined') update.from = String(from);
-  if (typeof to !== 'undefined') update.to = String(to);
-  if (typeof departAt !== 'undefined') update.departAt = String(departAt);
-  if (typeof driverId !== 'undefined') update.driverId = String(driverId);
-  if (typeof vehicleId !== 'undefined') update.vehicleId = String(vehicleId);
-  // Side-effects: when request starts, set vehicle to 'trip' and log a trip; when finishes/cancels, set vehicle back to 'base'
+app.post('/api/auth/register', async (req, res) => {
   try {
-    // Ensure arrays exist
-    db.trips = db.trips || [];
-    db.vehicles = db.vehicles || [];
+    const { email, password, name, position } = req.body || {};
+    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
+    const existing = await User.findOne({ email }).lean();
+    if (existing) return res.status(409).json({ message: 'User already exists' });
+    const passwordHash = await bcrypt.hash(password, 10);
+    const id = String(Date.now());
+    const u = await User.create({ id, email, name, position, role: 'user', status: 'pending', passwordHash });
+    const token = signToken(u);
+    res.status(201).json({ token, user: { id: u.id, email: u.email, name: u.name, role: u.role, position: u.position } });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
 
-    const vIdx = db.vehicles.findIndex((v) => String(v.id) === String(update.vehicleId));
-    const dExists = (db.drivers || []).some((d) => String(d.id) === String(update.driverId));
-    const vehicle = vIdx !== -1 ? db.vehicles[vIdx] : null;
+// Me endpoints
+app.get('/api/me', requireAuth, async (req, res) => {
+  try {
+    const u = await User.findOne({ id: req.user.id }).lean();
+    if (!u) return res.status(404).json({ message: 'Not found' });
+    res.json({ id: u.id, email: u.email, name: u.name, role: u.role, position: u.position });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
 
-    const prevStatus = prev.status;
-    const nextStatus = update.status;
+app.put('/api/me', requireAuth, async (req, res) => {
+  try {
+    const payload = {};
+    if (req.body.email) payload.email = req.body.email;
+    if (req.body.name) payload.name = req.body.name;
+    if (req.body.position) payload.position = req.body.position;
+    if (req.body.password) payload.passwordHash = await bcrypt.hash(req.body.password, 10);
+    const doc = await User.findOneAndUpdate({ id: req.user.id }, payload, { new: true }).lean();
+    if (!doc) return res.status(404).json({ message: 'Not found' });
+    const token = signToken(doc);
+    res.json({ token, user: { id: doc.id, email: doc.email, name: doc.name, role: doc.role, position: doc.position } });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
 
-    // Transition to in-progress: mark vehicle as on trip and create a 0-km trip log for departure
-    if (nextStatus === 'in-progress' && prevStatus !== 'in-progress') {
-      if (vehicle) {
-        db.vehicles[vIdx] = { ...vehicle, status: 'trip' };
-      }
-      if (vehicle && dExists) {
-        db.trips.push({
-          id: Date.now().toString(),
-          driverId: String(update.driverId),
-          vehicleId: String(update.vehicleId),
-          date: update.departAt || new Date().toISOString(),
-          distanceKm: 0,
-          notes: `[dispatch] старт: ${update.from} -> ${update.to} (request #${update.id})`,
-        });
-        // sanitize the just-added note
-        const _i = db.trips.length - 1;
-        db.trips[_i].notes = sanitizeArrows(db.trips[_i].notes);
-      }
-    }
+// Registrations & approval (admin)
+app.get('/api/registrations', async (req, res) => {
+  try { const pending = await User.find({ status: 'pending' }).lean(); res.json(pending); } catch (e) { res.status(500).json({ message: e.message }); }
+});
 
-    // Transition to done/canceled: if vehicle is on trip, return it to base
-    if ((nextStatus === 'done' || nextStatus === 'canceled') && vehicle && vehicle.status === 'trip') {
-      db.vehicles[vIdx] = { ...vehicle, status: 'base' };
-      if (dExists) {
-        db.trips.push({
-          id: (Date.now() + 1).toString(),
-          driverId: String(update.driverId),
-          vehicleId: String(update.vehicleId),
-          date: new Date().toISOString(),
-          distanceKm: 0,
-          notes: `[dispatch] завершено: ${update.from} -> ${update.to} (${nextStatus}) (request #${update.id})`,
-        });
-        const _j = db.trips.length - 1;
-        db.trips[_j].notes = sanitizeArrows(db.trips[_j].notes);
-      }
-    }
+app.post('/api/users/:id/approve', requireAuth, async (req, res) => {
+  try {
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'superadmin')) return res.status(403).json({ message: 'Forbidden' });
+    const doc = await User.findOneAndUpdate({ id: req.params.id }, { status: 'active' }, { new: true }).lean();
+    if (!doc) return res.status(404).json({ message: 'Not found' });
+    res.json({ id: doc.id, email: doc.email, name: doc.name, role: doc.role, position: doc.position });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+app.post('/api/users/:id/reject', requireAuth, async (req, res) => {
+  try {
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'superadmin')) return res.status(403).json({ message: 'Forbidden' });
+    const doc = await User.findOneAndUpdate({ id: req.params.id }, { status: 'rejected' }, { new: true }).lean();
+    if (!doc) return res.status(404).json({ message: 'Not found' });
+    res.json({ id: doc.id, email: doc.email, name: doc.name, role: doc.role, position: doc.position });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// fallback for unknown API
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) return res.status(404).json({ message: 'Not found' });
+  next();
+});
+
+async function start() {
+  try {
+    await connectMongo();
+    app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
   } catch (e) {
-    // Log but do not block the main update
-    console.error('Request side-effect failed:', e);
+    console.error('Failed to start server, mongo connect error:', e && e.message);
+    process.exit(1);
   }
-
-  db.requests[idx] = update;
-  writeDb(db);
-  res.json(update);
-});
-
-app.delete('/api/requests/:id', requireAuth(['admin', 'superadmin']), (req, res) => {
-  const { id } = req.params;
-  const db = readDb();
-  const before = (db.requests || []).length;
-  db.requests = (db.requests || []).filter((r) => r.id != id);
-  if ((db.requests || []).length === before) return res.status(404).json({ message: 'Not found' });
-  writeDb(db);
-  res.status(204).send();
-});
-
-// If this file is run directly, start the HTTP server. Otherwise export the app
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-
-  // Global error handler (shouldn't replace route-level handlers, but protects against crashes)
-  app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err && err.stack ? err.stack : err);
-    if (res.headersSent) return next(err);
-    res.status(500).json({ message: 'Internal server error' });
-  });
-} else {
-  module.exports = app;
 }
+
+if (require.main === module) start();
+module.exports = app;

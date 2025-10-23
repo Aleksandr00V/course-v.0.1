@@ -1,0 +1,9 @@
+id,email,role,position,passwordHash,name,status
+"1760896266258","admin@local","admin","Начальник автослужби","$2a$10$SdqoZrHfSKt0Oi.GStbQy.oFPyjsGV.6hV0FQa0JBtXZqEB.zKKne","Адміністратор","active"
+"1760900403300","aadmin@local","superadmin","Начальник автослужби","$2a$10$tOiFDLqd8oNg1w/uusdnM.EupjOtvpVbCX47GWh4BPI/154G/82De","Адміністратор","active"
+"1760902232852","vasya","user","Водій","$2a$10$1NuDb.lHi2VnBIbM9KDJbel3x5IrbJ2m095EzmAnljLYCSfaxf1AS","123123","active"
+"1761111884039","sasha","user","","$2a$10$vhKBu4BFAR5V6scTFvZBL.Em/s/jgu6SiKozVPlYPVOO9k1oSxFBy","Саша Іванов","active"
+"1761112047894","dwsq@gmail.com","user","","$2a$10$JK1gyDTUVQVwWzVVHNrUFeSVPCbrdXEGBiafbktUB/aT/AIM0b3TO","Дмитро Сидоров","active"
+"1761112848740","qwe@gmail.com","user","","$2a$10$q1zfMQgATxGWWXiHsFyHh.vwpL0vVqRfxDynyE0kuyXgvUXnNnt86","Олексій Петров","active"
+"1761113168489","1231@gmail.com","user","Старший Водій","$2a$10$DeKhoWe/ON4nzetuVibYsOjv1Ihs38dCnVi.hqKAwGSY5djEZcHiG","Войтенко Андрій Романович","active"
+"1761122974853","vashil047@gmail.com","user","Механік водій","$2a$10$6SyYFuywWsX5RG6mu5lmkePWZ00qGbvzSS9C9RmGVmaNkjc7C8wi6","Саша Саша Саша","pending"
