@@ -109,14 +109,20 @@ app.delete('/api/drivers/:id', async (req, res) => { try { await Driver.deleteOn
 // Users CRUD (secured)
 app.get('/api/users', requireAuth, async (req, res) => { 
   try { 
+    console.log('GET /api/users called by user:', req.user);
+    
     // Тільки адміни можуть бачити користувачів
     if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
       return res.status(403).json({ message: 'Access denied' });
     }
     
     const users = await User.find().select('-password').lean(); 
+    console.log('Found users count:', users.length);
+    console.log('User IDs:', users.map(u => u.id));
+    
     res.json(users); 
   } catch (e) { 
+    console.error('Error in GET /api/users:', e);
     res.status(500).json({ message: e.message }); 
   }
 });
@@ -162,8 +168,29 @@ app.post('/api/users', requireAuth, async (req, res) => {
 
 app.put('/api/users/:id', requireAuth, async (req, res) => { 
   try { 
-    // Тільки супер адміни або сам користувач можуть редагувати
-    if (req.user.role !== 'superadmin' && req.user.id !== req.params.id) {
+    console.log('PUT /api/users/:id called with:', {
+      id: req.params.id,
+      user: req.user,
+      body: { ...req.body, password: req.body.password ? '[HIDDEN]' : undefined }
+    });
+    
+    // Тільки супер адміни можуть повністю редагувати, адміни можуть міняти тільки посаду, самі користувачі можуть редагувати себе
+    if (req.user.role === 'superadmin') {
+      // Супер адмін може все
+    } else if (req.user.role === 'admin') {
+      // Адмін може міняти тільки посаду
+      const allowedFields = ['position'];
+      const updateKeys = Object.keys(req.body);
+      const hasUnallowedFields = updateKeys.some(key => !allowedFields.includes(key));
+      
+      if (hasUnallowedFields) {
+        console.log('Admin tried to update forbidden fields:', updateKeys);
+        return res.status(403).json({ message: 'Адміни можуть змінювати тільки посади користувачів' });
+      }
+    } else if (req.user.id === req.params.id) {
+      // Користувач може редагувати себе
+    } else {
+      console.log('Access denied for user:', req.user);
       return res.status(403).json({ message: 'Access denied' });
     }
     
@@ -174,7 +201,10 @@ app.put('/api/users/:id', requireAuth, async (req, res) => {
       updateData.password = await bcrypt.hash(updateData.password, 10);
     }
     
+    console.log('Looking for user with id:', req.params.id);
     const doc = await User.findOneAndUpdate({id:req.params.id}, updateData, {new:true}).select('-password').lean(); 
+    console.log('Found user:', doc ? 'YES' : 'NO');
+    
     if(!doc) return res.status(404).json({message:'Not found'}); 
     res.json(doc);
   } catch(e) {

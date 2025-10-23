@@ -36,14 +36,14 @@ export function AppNavbar() {
               <NavLink className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`} to="/cabinet">Кабінет</NavLink>
             </li>
             {(user?.role === 'admin' || user?.role === 'superadmin') && (
-              <li className="nav-item">
-                <NavLink className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`} to="/registrations">Реєстрації</NavLink>
-              </li>
-            )}
-            {user?.role === 'superadmin' && (
-              <li className="nav-item">
-                <NavLink className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`} to="/users">Користувачі</NavLink>
-              </li>
+              <>
+                <li className="nav-item">
+                  <NavLink className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`} to="/registrations">Реєстрації</NavLink>
+                </li>
+                <li className="nav-item">
+                  <NavLink className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`} to="/users">Користувачі</NavLink>
+                </li>
+              </>
             )}
           </ul>
           <div className="d-flex align-items-center gap-3">

@@ -48,7 +48,14 @@ export default function RegisterPage() {
     setError(null);
     if (!validateFields()) return;
     try {
-      await http.post('/auth/register', { email, password, lastName, firstName, middleName, position });
+      // Об'єднуємо ПІБ в одне поле name
+      const fullName = `${lastName} ${firstName} ${middleName}`.trim();
+      await http.post('/auth/register', { 
+        email, 
+        password, 
+        name: fullName,
+        position 
+      });
       setDone(true);
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Помилка реєстрації');
